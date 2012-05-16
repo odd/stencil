@@ -14,6 +14,6 @@ Directives:
 
 Examples
 --------
-`<person x:set-name="person.name" name="Kalle"/>` will produce the output `<person name="Pelle"/>` if and only if the expression 'person.name' resolves to `Pelle`
+`<person x:set-name="person.name" name="Kalle"/>` will produce the output `<person name="Pelle"/>` if and only if the expression `person.name` resolves to `Pelle`
 
-'<person x:let-name="person.name"><name x:set="name">Kalle</name></person>` will produce the output `<person><name>Pelle</name></person>` iff the expression `person.name` resolves to `Pelle`
+`<person x:let-name="person.name"><name x:set="name">Kalle</name></person>` will produce the output `<person><name>Pelle</name></person>` iff the expression `person.name` resolves to `Pelle`
