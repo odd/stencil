@@ -2,22 +2,27 @@ package stencil
 
 trait Environment {
   def parent: Option[Environment]
-  def bind(name: String, value: AnyRef): Environment = new SubEnvironment(Some(this), name -> value)
+  def bind(name: String, value: Option[AnyRef]): Environment = value match {
+    case None ⇒ new SubEnvironment(Some(this), name -> null)
+    case Some(v) ⇒ new SubEnvironment(Some(this), name -> v)
+  }
   def bind(bindings: (String, AnyRef)*): Environment = new SubEnvironment(Some(this), bindings: _*)
   def lookupLocal(name: String): Option[AnyRef]
-  def lookup(name: String): Option[AnyRef] = lookupLocal(name) match {
-    case None => parent.flatMap(_.lookup(name))
-    case Some(value) => Some(value)
-  }
-  def resolve(exp: String): AnyRef = {
-    def unwrap(v: AnyRef): AnyRef = {
-      if (v.isInstanceOf[Some[_]]) {
-        unwrap(v.asInstanceOf[Some[_]].get.asInstanceOf[AnyRef])
-      } else if (v == None) null
-      else v
+  def lookup(name: String): Option[AnyRef] = {
+    if (name.size > 1 && name.charAt(0) == '\'' && name.charAt(name.length - 1) == '\'') Some(name.substring(1, name.length - 1))
+    else lookupLocal(name) match {
+      case None => parent.flatMap(_.lookup(name))
+      case Some(value) => Some(value)
     }
-    def call(o: AnyRef, path: String): AnyRef = {
-      var result: AnyRef = null
+  }
+  def resolve(exp: String): Option[AnyRef] = {
+    def unwrap(v: AnyRef): Option[AnyRef] = {
+      if (v.isInstanceOf[Some[_]]) unwrap(v.asInstanceOf[Some[_]].get.asInstanceOf[AnyRef])
+      else if (v == None) None
+      else None
+    }
+    def call(o: AnyRef, path: String): Option[AnyRef] = {
+      var result: Option[AnyRef] = None
       val index = path.indexOf('.')
       val owner = unwrap(o)
       if (owner != null) {
@@ -28,13 +33,13 @@ trait Environment {
         } catch {
           case e: NoSuchMethodException ⇒ owner match {
             case map: Map[String, AnyRef] ⇒ result = unwrap(map(path))
-            case option: Option[AnyRef] ⇒ result = unwrap(option.get)
+            case some: Some[AnyRef] ⇒ result = unwrap(some.get)
             case _ ⇒
           }
           case e ⇒ e.printStackTrace()
         }
       }
-      if (result == null) {
+      if (result == None) {
         if (index == -1) {
           println("### Expression unresolvable [owner: " + owner + ", path: " + path + "].")
         } else {
@@ -71,27 +76,24 @@ trait Environment {
       if (owner == None) index = expression.substring(0, index).lastIndexOf('.')
     }
     if (owner.nonEmpty) {
-        if (index == -1) owner.get
+        if (index == -1) owner
         else call(owner.get, expression.substring(index + 1))
-    } else expression
+    } else None
   }
-  def traverse(value: AnyRef): Seq[Environment] = traverse(null, value)
-  def traverse(name: String, value: AnyRef): Seq[Environment] = value match {
-    case None ⇒ Seq.empty
+  def traverse(value: Option[AnyRef]): Seq[Environment] = traverse(null, value)
+  def traverse(name: String, value: Option[AnyRef]): Seq[Environment] = value match {
     case null ⇒ Seq.empty
-    case "" ⇒ Seq.empty
-    case t: Traversable[AnyRef] ⇒
+    case None ⇒ Seq.empty
+    case Some(null) ⇒ Seq.empty
+    case Some(None) ⇒ Seq.empty
+    case Some("") ⇒ Seq.empty
+    case Some(t: Traversable[AnyRef]) ⇒
       t.map { o =>
         if (name != null) SubEnvironment(Some(this), name → o)
         else this
       }.toSeq
-    case s: Option[AnyRef] =>
-      s.map { o =>
-        if (name != null) SubEnvironment(Some(this), name → o)
-        else this
-      }.toSeq
-    case o: AnyRef ⇒
-      if (name != null) Seq(SubEnvironment(Some(this), name → o))
+    case Some(v) =>
+      if (name != null) Seq(SubEnvironment(Some(this), name → v))
       else Seq(this)
   }
 }
@@ -104,5 +106,8 @@ case class SubEnvironment(
     override val parent: Some[Environment],
     bindings: (String, AnyRef)*) extends Environment {
   val map = bindings.toMap
-  def lookupLocal(name: String) = map.get(name)
+  def lookupLocal(name: String) = map.get(name) match {
+    case Some(null) ⇒ None
+    case o ⇒ o
+  }
 }

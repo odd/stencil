@@ -2,6 +2,7 @@ package stencil
 
 import scala.util.matching.Regex.Match
 import java.io.{Writer, StringWriter, StringReader, Reader}
+import io.Codec.string2codec
 
 class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Stencil.Transformer = Stencil.defaultTransformer) {
   import Stencil._
@@ -54,34 +55,35 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
                   directives = directives.tail),
                 environment.bind(name, transformer(transform → environment.resolve(expression))))
             case d @ Set(transform, name, expression) =>
-              val value = transformer(transform → environment.resolve(expression))
-              if (value != null)
-                apply(
-                  tag.copy(
-                    attributes = attributes.filterNot(_._1 == name) :+ ((name, value.toString)),
-                    directives = directives.tail),
-                  environment)
-              else
-                apply(
-                  tag.copy(
-                    attributes = attributes.filterNot(_._1 == name),
-                    directives = directives.tail),
-                  environment)
+              transformer(transform → environment.resolve(expression)) match {
+                case Some(value) =>
+                  apply(
+                    tag.copy(
+                      attributes = attributes.filterNot(_._1 == name) :+ ((name, value.toString)),
+                      directives = directives.tail),
+                    environment)
+                case None =>
+                  apply(
+                    tag.copy(
+                      attributes = attributes.filterNot(_._1 == name),
+                      directives = directives.tail),
+                    environment)
+              }
             case d @ SetBody(transform, expression) ⇒
               apply(
                 tag.copy(
                   directives = directives.tail,
-                  contents = Seq(Text(String.valueOf(transformer(transform → environment.resolve(expression)))))),
+                  contents = Seq(Text(transformer(transform → environment.resolve(expression)).getOrElse("").toString))),
                 environment)
             case d @ Do(transform, name, expression) =>
               environment.traverse(name, transformer(transform → environment.resolve(expression))).foreach { env =>
                 apply(
                   tag.copy(
                     directives = directives.tail),
-                  env.bind(name, transformer(transform → env.resolve(name))))
+                  env.bind(name, transformer(transform → env.resolve(expression))))
               }
             case d @ DoBody(transform, expression) ⇒
-              environment.traverse(transformer(transform → expression)).foreach { env =>
+              environment.traverse(transformer(transform → environment.resolve(expression))).foreach { env =>
                 apply(
                   tag.copy(
                     directives = directives.tail),
@@ -133,10 +135,8 @@ object Stencil {
   case class Tag(name: String, attributes: Seq[(String, String)], directives: Seq[Directive], contents: Seq[Node] = Seq.empty) extends Node with Container
 
   type =>?[-A, +B] = PartialFunction[A, B]
-  type Transformer = (Pair[String, AnyRef]) =>? AnyRef
-  val defaultTransformer: Transformer = {
-    case (_, value) ⇒ value
-  }
+  type Transformer = (Pair[String, Option[AnyRef]]) =>? Option[AnyRef]
+  val defaultTransformer: Transformer = { case (_, value) ⇒ value }
 
   sealed trait Directive
   case class Namespace(prefix: String, uri: String) extends Directive
@@ -150,7 +150,7 @@ object Stencil {
   def apply(literal: String): Stencil = apply(new StringReader(literal))
 
   val StartOrCloseTag = """<\s*(/)?([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?>""".r
-  val DirectionTag = """<\s*([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*(?:\s+(?:x:[\w_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))(?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?>""".r
+  val DirectionTag = """<(?:\s*([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*(?:\s+(?:x:[\w_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))(?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?)>|(!--.*?--)>""".r
   val Attribute = """\s+(?:(x|[\w_-]+):)?([\w_-]+)\s*=\s*(?:(?:"([^"]*)")|(?:'([^']*)'))""".r
 
   def parse(reader: Reader): Tree = Tree(parse(asCharSequence(reader)))
@@ -163,17 +163,22 @@ object Stencil {
       lastMatch match {
         case Some(m) =>
           val (tagStartStart, tagStartEnd) = (start + m.start, start + m.end)
-          //val tagData = data.subSequence(tagStartStart, tagStartEnd)
-          nodes ::= Text(data.subSequence(start, tagStartStart).toString)
-          val (attributes, directives) = parseAttributes(m.group(2))
-          if (m.group(3) == null) {
-            val (tagEndStart, tagEndEnd) = findBodyEndIndices(data, tagStartEnd, m.group(1))
-            val bodyData = data.subSequence(tagStartEnd, tagEndStart)
-            nodes ::= Tag(m.group(1), attributes, directives, parse(bodyData))
-            start = tagEndEnd
+          if (m.group(4) != null) {
+            nodes ::= Text(data.subSequence(start, tagStartEnd).toString)
+            start = m.end
           } else {
-            nodes ::= Tag(m.group(1), attributes, directives)
-            start = tagStartEnd
+            //val tagData = data.subSequence(tagStartStart, tagStartEnd)
+            nodes ::= Text(data.subSequence(start, tagStartStart).toString)
+            val (attributes, directives) = parseAttributes(m.group(2))
+            if (m.group(3) == null) {
+              val (tagEndStart, tagEndEnd) = findBodyEndIndices(data, tagStartEnd, m.group(1))
+              val bodyData = data.subSequence(tagStartEnd, tagEndStart)
+              nodes ::= Tag(m.group(1), attributes, directives, parse(bodyData))
+              start = tagEndEnd
+            } else {
+              nodes ::= Tag(m.group(1), attributes, directives)
+              start = tagStartEnd
+            }
           }
         case None =>
           nodes ::= Text(data.subSequence(start, data.length).toString)
@@ -259,7 +264,7 @@ object Main {
   case class Product(name: String, price: Double)
 
   def main(args: Array[String]) {
-    val data = """<html xmlns:x="http://traveas.net/stencil">
+    val data = """<html xmlns:x="http://github.com/odd/stencil">
                  |  <body x:let-customer="order.customer">
                  |    <span x:set="customer.name" title="title" x:set-title="order.customer.name">ACME</span> <span x:set="order.date">2012-01-01</span>
                  |    <table x:let-orderLines="order.lines" width="100%">
