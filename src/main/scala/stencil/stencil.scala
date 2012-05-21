@@ -264,7 +264,7 @@ object Main {
   case class Product(name: String, price: Double)
 
   def main(args: Array[String]) {
-    val data = """<html xmlns:x="http://github.com/odd/stencil">
+    val data = """<html xmlns:x="http://veloxian.org/stencil">
                  |  <body x:let-customer="order.customer">
                  |    <span x:set="customer.name" title="title" x:set-title="order.customer.name">ACME</span> <span x:set="order.date">2012-01-01</span>
                  |    <table x:let-orderLines="order.lines" width="100%">
