@@ -1,5 +1,7 @@
 package stencil
 
+import com.sun.tools.example.debug.bdi.MethodNotFoundException
+
 trait Environment {
   def parent: Option[Environment]
   def bind(name: String, value: Option[AnyRef]): Environment = value match {
@@ -7,78 +9,65 @@ trait Environment {
     case Some(v) ⇒ new SubEnvironment(Some(this), name -> v)
   }
   def bind(bindings: (String, AnyRef)*): Environment = new SubEnvironment(Some(this), bindings: _*)
-  def lookupLocal(name: String): Option[AnyRef]
-  def lookup(name: String): Option[AnyRef] = {
-    if (name.size > 1 && name.charAt(0) == '\'' && name.charAt(name.length - 1) == '\'') Some(name.substring(1, name.length - 1))
-    else lookupLocal(name) match {
-      case None => parent.flatMap(_.lookup(name))
-      case Some(value) => Some(value)
+  def lookup(name: String): Option[AnyRef]
+  def resolve(exp: String): Option[AnyRef] = {
+     if (exp.size > 1 && exp.charAt(0) == '\'' && exp.charAt(exp.length - 1) == '\'') Some(exp.substring(1, exp.length - 1))
+     else lookup(exp) match {
+      case None ⇒
+        resolveLocal(None, Some(Path(exp))) match {
+          case None ⇒ parent.flatMap(_.resolve(exp))
+          case v ⇒ v
+        }
+      case v ⇒ v
     }
   }
-  def resolve(exp: String): Option[AnyRef] = {
-    def unwrap(v: AnyRef): Option[AnyRef] = {
-      if (v.isInstanceOf[Some[_]]) unwrap(v.asInstanceOf[Some[_]].get.asInstanceOf[AnyRef])
-      else if (v == None) None
-      else None
-    }
-    def call(o: AnyRef, path: String): Option[AnyRef] = {
-      var result: Option[AnyRef] = None
-      val index = path.indexOf('.')
-      val owner = unwrap(o)
-      if (owner != null) {
-        try {
-          val method = owner.getClass.getMethod(path)
-          val wrappedResult = method.invoke(owner)
-          result = unwrap(wrappedResult)
-        } catch {
-          case e: NoSuchMethodException ⇒ owner match {
-            case map: Map[String, AnyRef] ⇒ result = unwrap(map(path))
-            case some: Some[AnyRef] ⇒ result = unwrap(some.get)
-            case _ ⇒
-          }
-          case e ⇒ e.printStackTrace()
-        }
+  case class Path(literal: String) {
+    def components: Seq[String] = literal.split('.').toSeq
+    def candidates: Seq[Path] = {
+      def inner(rest: String, list: List[Path]): List[Path] = rest.lastIndexOf('.') match {
+        case -1 ⇒ Path(rest) :: list
+        case index ⇒ inner(rest.substring(0, index), Path(rest) :: list)
       }
-      if (result == None) {
-        if (index == -1) {
-          println("### Expression unresolvable [owner: " + owner + ", path: " + path + "].")
-        } else {
-          val subOwner = unwrap(owner.getClass.getMethod(path.substring(0, index)).invoke(owner))
-          if (subOwner != null) {
-            result = unwrap(call(subOwner, path.substring(index + 1)))
+      inner(literal, Nil).reverse
+    }
+    def rest(literal: String): Path = rest(Path(literal))
+    def rest(path: Path): Path = {
+      require(literal.startsWith(path.literal))
+      Path(literal.substring(path.literal.length + 1))
+    }
+  }
+  object Path {
+    val empty = Path("")
+  }
+  def resolveLocal(owner: Option[AnyRef], path: Option[Path]): Option[AnyRef] = {
+    (owner, path) match {
+      case (None, None) ⇒ None
+      case (Some(Some(o: AnyRef)), None) ⇒ Some(o)
+      case (Some(o), None) ⇒ Some(o)
+      case (x, Some(p)) if (x == None || x == null) ⇒
+        p.candidates.collectFirst {
+          case subPath ⇒ lookup(subPath.literal).map {
+            v ⇒ resolveLocal(Some(v), Some(p.rest(subPath)))
+          }
+        }.getOrElse(None)
+      case (Some(m: Map[String, _]), Some(p)) ⇒
+        p.candidates.collectFirst {
+          case subPath ⇒ m.get(subPath.literal).collect {
+            case v: AnyRef ⇒ resolveLocal(Some(v), Some(p.rest(subPath)))
+          }
+        }.getOrElse(None)
+      case (Some(Some(o: AnyRef)), Some(p)) ⇒
+        resolveLocal(Some(o), path)
+      case (Some(o: AnyRef), Some(p)) ⇒
+        p.components.headOption.map { c =>
+          try {
+            resolveLocal(Some(o.getClass.getMethod(c).invoke(o)), Some(p.rest(c)))
+          } catch {
+            case e: MethodNotFoundException ⇒ None
           }
         }
-      }
-      result
+      case _ ⇒ throw new IllegalArgumentException("Unknown owner or path [owner: " + owner + ", path: " + path + "].")
     }
-    /*
-    val startIndex = math.max(exp.indexOf('\''), 0)
-    val endIndex = math.max(exp.lastIndexOf('\''), exp.length)
-    val prefix = exp.substring(0, startIndex)
-    val suffix = exp.substring(endIndex)
-    val expression = exp.substring(startIndex, endIndex)
-    var owner = lookup(expression)
-    var index = expression.lastIndexOf('.')
-    while (owner == None && index > -1) {
-      owner = lookup(expression.substring(0, index))
-      if (owner == None) index = expression.substring(0, index).lastIndexOf('.')
-    }
-    if (owner.nonEmpty) {
-        if (index == -1) prefix + owner.get + suffix
-        else prefix + call(owner.get, expression.substring(index + 1)) + suffix
-    } else prefix + expression + suffix
-    */
-    val expression = exp
-    var owner = lookup(expression)
-    var index = expression.lastIndexOf('.')
-    while (owner == None && index > -1) {
-      owner = lookup(expression.substring(0, index))
-      if (owner == None) index = expression.substring(0, index).lastIndexOf('.')
-    }
-    if (owner.nonEmpty) {
-        if (index == -1) owner
-        else call(owner.get, expression.substring(index + 1))
-    } else None
   }
   def traverse(value: Option[AnyRef]): Seq[Environment] = traverse(null, value)
   def traverse(name: String, value: Option[AnyRef]): Seq[Environment] = value match {
@@ -99,14 +88,14 @@ trait Environment {
 }
 case object RootEnvironment extends Environment {
   def parent = None
-  def lookupLocal(name: String) = None
+  def lookup(name: String) = None
 }
 
 case class SubEnvironment(
     override val parent: Some[Environment],
     bindings: (String, AnyRef)*) extends Environment {
   val map = bindings.toMap
-  def lookupLocal(name: String) = map.get(name) match {
+  def lookup(name: String) = map.get(name) match {
     case Some(null) ⇒ None
     case o ⇒ o
   }

@@ -165,7 +165,7 @@ object Stencil {
           val (tagStartStart, tagStartEnd) = (start + m.start, start + m.end)
           if (m.group(4) != null) {
             nodes ::= Text(data.subSequence(start, tagStartEnd).toString)
-            start = m.end
+            start = tagStartEnd
           } else {
             //val tagData = data.subSequence(tagStartStart, tagStartEnd)
             nodes ::= Text(data.subSequence(start, tagStartStart).toString)
