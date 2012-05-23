@@ -30,10 +30,10 @@ trait Environment {
       }
       inner(literal, Nil).reverse
     }
-    def rest(literal: String): Path = rest(Path(literal))
-    def rest(path: Path): Path = {
-      require(literal.startsWith(path.literal))
-      Path(literal.substring(path.literal.length + 1))
+    def rest(literal: String): Option[Path] = rest(Path(literal))
+    def rest(path: Path): Option[Path] = {
+      if ((literal.startsWith(path.literal + "."))) Some(Path(literal.substring(path.literal.length + 1)))
+      else None
     }
   }
   object Path {
@@ -42,35 +42,45 @@ trait Environment {
   def resolveLocal(owner: Option[AnyRef], path: Option[Path]): Option[AnyRef] = {
     (owner, path) match {
       case (None, None) ⇒ None
+      case (Some(None), _) ⇒ None
       case (Some(Some(o: AnyRef)), None) ⇒ Some(o)
       case (Some(o), None) ⇒ Some(o)
       case (x, Some(p)) if (x == None || x == null) ⇒
-        p.candidates.collectFirst {
-          case subPath ⇒ lookup(subPath.literal).map {
-            v ⇒ resolveLocal(Some(v), Some(p.rest(subPath)))
+        val candidates = p.candidates
+        val best = candidates.flatMap { subPath =>
+            val subLiteral = subPath.literal
+            lookup(subLiteral).map { v ⇒
+              val rest = p.rest(subPath)
+              resolveLocal(Some(v), rest)
           }
-        }.getOrElse(None)
+        }.find(_ != None)
+        best.getOrElse(None)
       case (Some(m: Map[String, _]), Some(p)) ⇒
-        p.candidates.collectFirst {
-          case subPath ⇒ m.get(subPath.literal).collect {
-            case v: AnyRef ⇒ resolveLocal(Some(v), Some(p.rest(subPath)))
+        p.candidates.flatMap {
+          case subPath ⇒ m.get(subPath.literal).flatMap {
+            case v: AnyRef ⇒ resolveLocal(Some(v), p.rest(subPath))
           }
-        }.getOrElse(None)
+        }.find(_ != None)
       case (Some(Some(o: AnyRef)), Some(p)) ⇒
         resolveLocal(Some(o), path)
       case (Some(o: AnyRef), Some(p)) ⇒
-        p.components.headOption.map { c =>
-          try {
-            resolveLocal(Some(o.getClass.getMethod(c).invoke(o)), Some(p.rest(c)))
-          } catch {
-            case e: MethodNotFoundException ⇒ None
-          }
+        val result = p.components.headOption.flatMap {
+          c =>
+            try {
+              val local = resolveLocal(Some(o.getClass.getMethod(c).invoke(o)), p.rest(c))
+              local
+            } catch {
+              case e: MethodNotFoundException ⇒ None
+            }
         }
+        result
       case _ ⇒ throw new IllegalArgumentException("Unknown owner or path [owner: " + owner + ", path: " + path + "].")
     }
   }
-  def traverse(value: Option[AnyRef]): Seq[Environment] = traverse(null, value)
-  def traverse(name: String, value: Option[AnyRef]): Seq[Environment] = value match {
+  def traverse(exp: String): Seq[Environment] = traverseValue(resolve(exp))
+  def traverse(name: String, exp: String): Seq[Environment] = traverseValue(name, resolve(exp))
+  private[stencil] def traverseValue(value: Option[AnyRef]): Seq[Environment] = traverseValue(null, value)
+  private[stencil] def traverseValue(name: String, value: Option[AnyRef]): Seq[Environment] = value match {
     case null ⇒ Seq.empty
     case None ⇒ Seq.empty
     case Some(null) ⇒ Seq.empty

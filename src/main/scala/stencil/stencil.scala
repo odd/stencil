@@ -76,14 +76,14 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
                   contents = Seq(Text(transformer(transform → environment.resolve(expression)).getOrElse("").toString))),
                 environment)
             case d @ Do(transform, name, expression) =>
-              environment.traverse(name, transformer(transform → environment.resolve(expression))).foreach { env =>
+              environment.traverseValue(name, transformer(transform → environment.resolve(expression))).foreach { env =>
                 apply(
                   tag.copy(
                     directives = directives.tail),
                   env.bind(name, transformer(transform → env.resolve(expression))))
               }
             case d @ DoBody(transform, expression) ⇒
-              environment.traverse(transformer(transform → environment.resolve(expression))).foreach { env =>
+              environment.traverseValue(transformer(transform → environment.resolve(expression))).foreach { env =>
                 apply(
                   tag.copy(
                     directives = directives.tail),
