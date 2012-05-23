@@ -55,14 +55,24 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
                   directives = directives.tail),
                 environment.bind(name, transformer(transform → environment.resolve(expression))))
             case d @ Set(transform, name, expression) =>
-              transformer(transform → environment.resolve(expression)) match {
-                case Some(value) =>
-                  apply(
-                    tag.copy(
-                      attributes = attributes.filterNot(_._1 == name) :+ ((name, value.toString)),
-                      directives = directives.tail),
-                    environment)
-                case None =>
+              environment.resolve(expression) match {
+                case Some(v: AnyRef) ⇒
+                  transformer(transform → Some(v)) match {
+                    case Some(value) =>
+                      apply(
+                        tag.copy(
+                          attributes = attributes.filterNot(_._1 == name) :+ ((name, value.toString)),
+                          directives = directives.tail),
+                        environment)
+                    case None =>
+                      apply(
+                        tag.copy(
+                          attributes = attributes.filterNot(_._1 == name),
+                          directives = directives.tail),
+                        environment)
+                  }
+                case x ⇒
+                  val y = x
                   apply(
                     tag.copy(
                       attributes = attributes.filterNot(_._1 == name),
@@ -80,7 +90,7 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
                 apply(
                   tag.copy(
                     directives = directives.tail),
-                  env.bind(name, transformer(transform → env.resolve(expression))))
+                  env)
               }
             case d @ DoBody(transform, expression) ⇒
               environment.traverseValue(transformer(transform → environment.resolve(expression))).foreach { env =>
