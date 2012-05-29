@@ -1,7 +1,5 @@
 package stencil
 
-import com.sun.tools.example.debug.bdi.MethodNotFoundException
-
 trait Environment {
   def parent: Option[Environment]
   def bind(name: String, value: Option[AnyRef]): Environment = value match {
@@ -70,7 +68,7 @@ trait Environment {
               val local = resolveLocal(Some(o.getClass.getMethod(c).invoke(o)), p.rest(c))
               local
             } catch {
-              case e: MethodNotFoundException ⇒ None
+              case e: NoSuchMethodException ⇒ None
             }
         }
         result
