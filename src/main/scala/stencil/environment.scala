@@ -9,7 +9,8 @@ trait Environment {
   def bind(bindings: (String, AnyRef)*): Environment = new SubEnvironment(Some(this), bindings: _*)
   def lookup(name: String): Option[AnyRef]
   def resolve(exp: String): Option[AnyRef] = {
-     if (exp.size > 1 && exp.charAt(0) == '\'' && exp.charAt(exp.length - 1) == '\'') Some(exp.substring(1, exp.length - 1))
+     if (exp.size > 1 && exp.charAt(0) == '\'' && exp.charAt(exp.length - 1) == '\'') resolveLiteral(exp)
+     else if (exp.size > 1 && exp.charAt(0) == '/' && exp.charAt(exp.length - 1) == '/') resolveReplace(exp)
      else lookup(exp) match {
       case None ⇒
         resolveLocal(None, Some(Path(exp))) match {
@@ -19,6 +20,15 @@ trait Environment {
       case v ⇒ v
     }
   }
+  def resolveLiteral(exp: String): Option[String] = Some(exp.substring(1, exp.length - 1))
+  def resolveReplace(exp: String): Option[(String, Option[AnyRef])] = {
+    val e = exp.substring(1, exp.length - 1)
+    val index = e.indexOf('/')
+    val pattern = e.substring(0, index)
+    val replacement = e.substring(index + 1)
+    Some((pattern, resolve(replacement)))
+  }
+
   case class Path(literal: String) {
     def components: Seq[String] = literal.split('.').toSeq
     def candidates: Seq[Path] = {

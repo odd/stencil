@@ -114,6 +114,30 @@ class StencilSpecification extends FunSuite {
       <!--<span x:set-name="persons" name="Nisse">-->
       """, "persons" → "Pelle")
   }
+  test("replacement expressions are resolved for set body bindings") {
+    assert("""
+      <span x:set="/Kalle/person/">Hello Kalle!</span>
+      """, """
+      <span>Hello Pelle!</span>
+      """, "person" → "Pelle")
+  }
+  test("replacement expressions are resolved for set bindings") {
+    assert("""
+      <span x:set-title="/Kalle/person/" title="Hello Kalle!"/>
+      """, """
+      <span title="Hello Pelle!"/>
+      """, "person" → "Pelle")
+  }
+  /*
+  test("complex replacement expressions are resolved for set bindings") {
+    assert("""
+      <span x:set="/Hello/'Grettings'/;/Kalle/person/">Hello Kalle!</span>
+      <span x:set="/(Hello)(Kalle)/'Grettings';person/">Hello Kalle!</span>
+      """, """
+      <span>Greetings Pelle!</span>
+      """, "person" → "Pelle")
+  }
+  */
 
   private def assert(actual: String, expected: String, bindings: (String, AnyRef)*) {
     assert(Stencil(actual).apply(bindings: _*) === expected)

@@ -56,6 +56,23 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
                 environment.bind(name, transformer(transform → environment.resolve(expression))))
             case d @ Set(transform, name, expression) =>
               environment.resolve(expression) match {
+                case Some((p: String, Some(v: AnyRef))) ⇒
+                  transformer(transform → Some(v)) match {
+                    case Some(value) =>
+                      attributes.find(_._1 == name).map(_._2.replace(p, value.toString)).foreach { replacedValue =>
+                        apply(
+                          tag.copy(
+                            attributes = attributes.filterNot(_._1 == name) :+ ((name, replacedValue)),
+                            directives = directives.tail),
+                          environment)
+                      }
+                    case None =>
+                      apply(
+                        tag.copy(
+                          attributes = attributes.filterNot(_._1 == name),
+                          directives = directives.tail),
+                        environment)
+                  }
                 case Some(v: AnyRef) ⇒
                   transformer(transform → Some(v)) match {
                     case Some(value) =>
@@ -80,11 +97,52 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
                     environment)
               }
             case d @ SetBody(transform, expression) ⇒
+              environment.resolve(expression) match {
+                case Some((p: String, Some(v: AnyRef))) ⇒
+                  transformer(transform → Some(v)) match {
+                    case Some(value) =>
+                      apply(
+                        tag.copy(
+                          directives = directives.tail,
+                          contents = tag.contents.collect {
+                            case Text(data) ⇒ Text(data.replace(p, value.toString))
+                            case n ⇒ n
+                          }),
+                        environment)
+                    case None =>
+                      apply(
+                        tag.copy(
+                          directives = directives.tail),
+                        environment)
+                  }
+                case Some(v: AnyRef) ⇒
+                  transformer(transform → Some(v)) match {
+                    case Some(value) =>
+                      apply(
+                        tag.copy(
+                          directives = directives.tail,
+                          contents = Seq(Text(value.toString))),
+                        environment)
+                    case None =>
+                      apply(
+                        tag.copy(
+                          directives = directives.tail),
+                        environment)
+                  }
+                case x ⇒
+                  val y = x
+                  apply(
+                    tag.copy(
+                      directives = directives.tail),
+                    environment)
+              }
+              /*
               apply(
                 tag.copy(
                   directives = directives.tail,
-                  contents = Seq(Text(transformer(transform → environment.resolve(expression)).getOrElse("").toString))),
-                environment)
+                  contents = Seq(Text())),
+                environment
+                )*/
             case d @ Do(transform, name, expression) =>
               environment.traverseValue(name, transformer(transform → environment.resolve(expression))).foreach { env =>
                 apply(
