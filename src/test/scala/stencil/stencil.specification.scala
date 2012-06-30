@@ -72,28 +72,40 @@ class StencilSpecification extends FunSuite {
   }
   test("do directives should repeat their target element zero times for None values") {
     assert("""
+      <prefix/>
       <span x:do="manager">
         <manager>
           <name x:set="manager.name">Nisse</name>
         </manager>
-      </span>""", """
-      """, "manager" → None)
+      </span>
+      <suffix/>""", """
+      <prefix/>
+      
+      <suffix/>""", "manager" → None)
     assert("""
+      <prefix/>
       <span x:do-boss="manager">
         <manager>
           <name x:set="boss.name">Nisse</name>
         </manager>
-      </span>""", """
-      """, "manager" → None)
+      </span>
+      <suffix/>""", """
+      <prefix/>
+      
+      <suffix/>""", "manager" → None)
   }
   test("do directives should repeat their target element zero times for Nil values") {
     assert("""
+      <prefix/>
       <span x:do="persons">
         <person>
-          <names x:set="persons">Kalle</names>
+          <name x:set="persons">Kalle</name>
         </person>
-      </span>""", """
-      """, "persons" → Nil)
+      </span>
+      <suffix/>""", """
+      <prefix/>
+      
+      <suffix/>""", "persons" → Nil)
     assert("""
       <span x:do-person="persons">
         <person>
@@ -101,6 +113,37 @@ class StencilSpecification extends FunSuite {
         </person>
       </span>""", """
       """, "persons" → Nil)
+  }
+  case class Person(name: String, company: String)
+  test("do directives should repeat their target element the correct number of times") {
+    assert("""
+      <prefix/>
+      <person x:do-person="persons">
+        <name x:set="person.name">Kalle</name>
+        <company x:set="person.company">ACME</company>
+      </person>
+      <suffix/>""", """
+      <prefix/>
+      <person>
+        <name>Lasse</name>
+        <company>FOO</company>
+      </person><person>
+        <name>Pelle</name>
+        <company>BAR</company>
+      </person><person>
+        <name>Nisse</name>
+        <company>FOOBAR</company>
+      </person>
+      <suffix/>""", "persons" → List(Person("Lasse", "FOO"), Person("Pelle", "BAR"), Person("Nisse", "FOOBAR")))
+  }
+  test("missing end tags should throw exception") {
+    intercept[IllegalStateException](Stencil("""
+      <prefix/>
+      <person x:do-person="persons">
+        <name x:set-value="person.name" value="Kalle">
+        <company x:set="person.company">ACME</company>
+      </person>
+      <suffix/>"""))
   }
   test("directives in comments are ignored") {
     assert("""

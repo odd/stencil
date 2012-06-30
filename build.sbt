@@ -1,6 +1,6 @@
 name := "stencil"
 
-organization := "org.veloxian"
+organization := "org.bitbonanza"
 
 version := "0.1-SNAPSHOT"
 

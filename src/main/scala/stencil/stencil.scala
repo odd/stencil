@@ -1,8 +1,7 @@
 package stencil
 
-import scala.util.matching.Regex.Match
+import util.matching.Regex.{MatchData, Match}
 import java.io.{Writer, StringWriter, StringReader, Reader}
-import io.Codec.string2codec
 
 class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Stencil.Transformer = Stencil.defaultTransformer) {
   import Stencil._
@@ -305,6 +304,29 @@ object Stencil {
   }
   private def findBodyEndIndices(data: CharSequence, offset: Int, tagName: String): (Int, Int) = {
     var start = offset
+    var stack = List((tagName, null: MatchData))
+    var last: Match = null
+    while (stack.nonEmpty && start < data.length) {
+      StartOrCloseTag.findFirstMatchIn(data.subSequence(start, data.length)) match {
+        case None ⇒ throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
+        case Some(m) ⇒
+          if (m.group(1) == "/") {
+            if (stack.head._1 != m.group(2)) {
+              throw new IllegalStateException("No matching end tag found for start tag [" + stack.head._2 + " @ offset: " + stack.head._2.start + "].")
+            }
+            stack = stack.tail
+          } else if (m.group(4) == null) {
+            stack ::= (m.group(2), m)
+          }
+          last = m
+      }
+      start += last.end
+    }
+    if (last != null) (start - (last.end - last.start), start)
+    else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
+  }
+  private def findBodyEndIndices0(data: CharSequence, offset: Int, tagName: String): (Int, Int) = {
+    var start = offset
     var level = 1
     var last: Match = null
     while (level > 0 && start < data.length) {
@@ -323,6 +345,68 @@ object Stencil {
     if (last != null) (start - (last.end - last.start), start)
     else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
   }
+  /*
+  private def findBodyEndIndices1(data: CharSequence, offset: Int, tagName: String): (Int, Int) = {
+    var start = offset
+    var stack = List(tagName)
+    var end = -1
+    while (stack.nonEmpty && start < data.length) {
+      StartOrCloseTag.findFirstMatchIn(data.subSequence(start, data.length)) match {
+        case None ⇒
+          // Must be missing / in start tag which should be treated as an empty tag
+          stack = Nil
+          start = -1
+          end = offset
+        case Some(m) ⇒
+          val name = m.group(2)
+          if (m.group(1) == "/") {
+            stack = stack.dropWhile(_ != tagName)
+            stack = stack.tail
+            if (stack.isEmpty && name == tagName) {
+              start = -1
+            }
+          } else if (m.group(4) == null) {
+            stack ::= m.group(2)
+          }
+          end = start + m.end
+      }
+      if (stack.nonEmpty) start = end
+    }
+    //if (last != null) (start - (last.end - last.start), start)
+    (start, end)
+    //else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
+    //(start - (lastEnd - lastStart), start)
+  }
+
+  private def findBodyEndIndices2(data: CharSequence, offset: Int, tagName: String): (Int, Int) = {
+    var start = offset
+    var stack: List[Any] = Nil //List(new MatchData(c))
+    var last: MatchData = null
+    var end = -1
+    while (stack.nonEmpty && start < data.length) {
+      StartOrCloseTag.findFirstMatchIn(data.subSequence(start, data.length)) match {
+        case None ⇒ throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
+        case Some(m) ⇒
+          val name = m.group(2)
+          if (m.group(1) == "/") {
+            stack = stack.dropWhile(_ != name)
+            stack = stack.tail
+            if (stack.isEmpty && name == tagName) {
+              end = m.end
+            }
+          } else if (m.group(4) == null) {
+            stack ::= m.group(2)
+          }
+          last = m
+      }
+      start += last.end
+    }
+    //if (last != null) (start - (last.end - last.start), start)
+    if (last != null) (start - (end - last.start), start)
+    else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
+    //(start - (lastEnd - lastStart), start)
+  }
+  */
 }
 
 object Main {
