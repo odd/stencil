@@ -70,6 +70,20 @@ class StencilSpecification extends FunSuite {
       </span>""", """
       """)
   }
+  test("do directives should repeat their target element zero times for false values") {
+    case class Manager(name: String, active: Boolean)
+    assert("""
+      <prefix/>
+      <span x:do="manager.active">
+        <manager>
+          <name x:set="manager.name">Nisse</name>
+        </manager>
+      </span>
+      <suffix/>""", """
+      <prefix/>
+      
+      <suffix/>""", "manager" → Manager("Pelle", false))
+  }
   test("do directives should repeat their target element zero times for None values") {
     assert("""
       <prefix/>

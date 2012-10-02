@@ -91,6 +91,7 @@ trait Environment {
   private[stencil] def traverseValue(name: String, value: Option[AnyRef]): Seq[Environment] = value match {
     case null ⇒ Seq.empty
     case None ⇒ Seq.empty
+    case Some(java.lang.Boolean.FALSE) ⇒ Seq.empty
     case Some(null) ⇒ Seq.empty
     case Some(None) ⇒ Seq.empty
     case Some("") ⇒ Seq.empty
