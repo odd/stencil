@@ -1,8 +1,10 @@
 package stencil
 
 import org.scalatest.FunSuite
+import scala.xml.XML
 
 class EnvironmentSpecification extends FunSuite {
+  /*
   test("emtpy environments resolves all expressions and all lookups to None") {
     assert(RootEnvironment.resolve("Kalle") === None)
     assert(RootEnvironment.lookup("Kalle") === None)
@@ -81,5 +83,25 @@ class EnvironmentSpecification extends FunSuite {
     val env = RootEnvironment.bind("person" → kalle)
     assert(env.traverse("person.friends").size === 2)
     assert(env.traverse("friend", "person.friends").map(_.resolve("friend.alias")) === Seq(Some("Slick"), Some("Animal")))
+  }
+  */
+  test("XML nodes are traversed") {
+    val xml = XML.loadString(
+      """<person id="kalle">
+        | <name first="Kalle" last="Blomkvist"/>
+        | <friends>
+        |   <person id="nisse" alias="Slick">
+        |     <name first="Nisse" last="Karlsson"/>
+        |   </person>
+        |   <person id="pelle" alias="Animal">
+        |     <name first="Pelle" last="Persson"/>
+        |   </person>
+        | </friends>
+        |</person>""")
+    val env = RootEnvironment.bind(xml)
+    val traverse = env.traverse("person.friends.person")
+    assert(traverse.size === 2)
+    val traverseFriend = env.traverse("friend", "person.friends.person")
+    assert(traverseFriend.map(_.resolve("friend.alias")) === Seq(Some("Slick"), Some("Animal")))
   }
 }
