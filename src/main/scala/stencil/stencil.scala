@@ -8,7 +8,7 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
   def this(reader: Reader) = this(reader, Stencil.parse(reader))
   def withTransformer(transformer: Transformer): Stencil = new Stencil(reader, tree, transformer.orElse(defaultTransformer))
   def apply(bindings: (String, AnyRef)*): String = {
-    val environment = RootEnvironment.bind(bindings: _*)
+    val environment = EmptyEnvironment.bind(bindings: _*)
     implicit val writer = new StringWriter()
     tree.contents.foreach { n ⇒ apply(n, environment) }
     writer.getBuffer.toString
@@ -345,68 +345,6 @@ object Stencil {
     if (last != null) (start - (last.end - last.start), start)
     else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
   }
-  /*
-  private def findBodyEndIndices1(data: CharSequence, offset: Int, tagName: String): (Int, Int) = {
-    var start = offset
-    var stack = List(tagName)
-    var end = -1
-    while (stack.nonEmpty && start < data.length) {
-      StartOrCloseTag.findFirstMatchIn(data.subSequence(start, data.length)) match {
-        case None ⇒
-          // Must be missing / in start tag which should be treated as an empty tag
-          stack = Nil
-          start = -1
-          end = offset
-        case Some(m) ⇒
-          val name = m.group(2)
-          if (m.group(1) == "/") {
-            stack = stack.dropWhile(_ != tagName)
-            stack = stack.tail
-            if (stack.isEmpty && name == tagName) {
-              start = -1
-            }
-          } else if (m.group(4) == null) {
-            stack ::= m.group(2)
-          }
-          end = start + m.end
-      }
-      if (stack.nonEmpty) start = end
-    }
-    //if (last != null) (start - (last.end - last.start), start)
-    (start, end)
-    //else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
-    //(start - (lastEnd - lastStart), start)
-  }
-
-  private def findBodyEndIndices2(data: CharSequence, offset: Int, tagName: String): (Int, Int) = {
-    var start = offset
-    var stack: List[Any] = Nil //List(new MatchData(c))
-    var last: MatchData = null
-    var end = -1
-    while (stack.nonEmpty && start < data.length) {
-      StartOrCloseTag.findFirstMatchIn(data.subSequence(start, data.length)) match {
-        case None ⇒ throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
-        case Some(m) ⇒
-          val name = m.group(2)
-          if (m.group(1) == "/") {
-            stack = stack.dropWhile(_ != name)
-            stack = stack.tail
-            if (stack.isEmpty && name == tagName) {
-              end = m.end
-            }
-          } else if (m.group(4) == null) {
-            stack ::= m.group(2)
-          }
-          last = m
-      }
-      start += last.end
-    }
-    //if (last != null) (start - (last.end - last.start), start)
-    if (last != null) (start - (end - last.start), start)
-    else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
-    //(start - (lastEnd - lastStart), start)
-  }
-  */
 }
 
 object Main {
@@ -416,7 +354,7 @@ object Main {
   case class Product(name: String, price: Double)
 
   def main(args: Array[String]) {
-    val data = """<html xmlns:x="http://veloxian.org/stencil">
+    val data = """<html xmlns:x="http://bitbonanza.org/stencil">
                  |  <body x:let-customer="order.customer">
                  |    <span x:set="customer.name" title="title" x:set-title="order.customer.name">ACME</span> <span x:set="order.date">2012-01-01</span>
                  |    <table x:let-orderLines="order.lines" width="100%">
