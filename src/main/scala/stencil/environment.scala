@@ -3,23 +3,7 @@ package stencil
 import scala.xml.NodeSeq
 import stencil.Environment.Path
 
-trait Environmental {
-  import Environment._
-  def apply(nodes: NodeSeq): XmlEnvironment = apply(Empty, nodes)
-  def apply(parent: Environment, nodes: NodeSeq): XmlEnvironment = new XmlEnvironment(parent, nodes)
-  def apply(bindings: Map[String, AnyRef]): Environment = apply(Empty, bindings)
-  def apply(parent: Environment, bindings: Map[String, AnyRef]): Environment = new MapEnvironment(parent, bindings)
-  def apply(name: String, value: Option[AnyRef]): Environment = apply(Empty, name, value)
-  def apply(parent: Environment, name: String, value: Option[AnyRef]): Environment = value match {
-    case Some(v) ⇒ new MapEnvironment(parent, name -> v)
-    case None ⇒ new MapEnvironment(parent, name -> null)
-  }
-  def apply(bindings: (String, AnyRef)*): Environment = apply(Empty, bindings: _*)
-  def apply(parent: Environment, bindings: (String, AnyRef)*): Environment = new MapEnvironment(parent, bindings: _*)
-  def apply(instance: AnyRef): Environment = apply(Empty, instance)
-  def apply(parent: Environment, instance: AnyRef): Environment = new ReflectiveEnvironment(parent, instance)
-}
-trait Environment extends Environmental {
+trait Environment {
   def lookup(name: String): Option[AnyRef]
   def resolve(exp: String): Option[AnyRef] = {
     if (isLiteral(exp)) resolveLiteral(exp)
@@ -27,8 +11,15 @@ trait Environment extends Environmental {
     else lookup(exp).orElse(resolveLocal(None, Some(Path(exp))))
   }
 
-  def traverse(exp: String): Seq[Environment] = traverseValue(resolve(exp))
-  def traverse(name: String, exp: String): Seq[Environment] = traverseValue(name, resolve(exp))
+  def apply(exp: String): Seq[Environment] = traverseValue(Path(exp).components.last, resolve(exp))
+  def apply(name: String, exp: String): Seq[Environment] = traverseValue(name, resolve(exp))
+  def apply(nodes: NodeSeq): XmlEnvironment = new XmlEnvironment(this, nodes)
+  def apply(bindings: Map[String, AnyRef]): Environment = new MapEnvironment(this, bindings)
+  def apply(name: String, value: Option[AnyRef]): Environment = value match {
+    case Some(v) ⇒ new MapEnvironment(this, name -> v)
+    case None ⇒ new MapEnvironment(this, name -> null)
+  }
+  def apply(bindings: (String, AnyRef)*): Environment = new MapEnvironment(this, bindings: _*)
 
   private[stencil] def isLiteral(exp: String) = exp.size > 1 && exp.charAt(0) == '\'' && exp.charAt(exp.length - 1) == '\''
   private[stencil] def isReplace(exp: String) = exp.size > 1 && exp.charAt(0) == '/' && exp.charAt(exp.length - 1) == '/'
@@ -49,9 +40,9 @@ trait Environment extends Environmental {
       case (x, Some(p)) if (x == None || x == null) ⇒
         val candidates = p.candidates
         val mapped = candidates.flatMap { subPath =>
-          val subLiteral = subPath.literal
-          val lookuped = lookup(subLiteral)
-          lookuped.map { v ⇒
+          val subPathValue = subPath.value
+          val value = lookup(subPathValue)
+          value.map { v ⇒
             val rest = p.rest(subPath)
             resolveLocal(Some(v), rest)
           }
@@ -60,7 +51,7 @@ trait Environment extends Environmental {
         best.getOrElse(None)
       case (Some(m: Map[String, _]), Some(p)) ⇒
         p.candidates.flatMap {
-          case subPath ⇒ m.get(subPath.literal).flatMap {
+          case subPath ⇒ m.get(subPath.value).flatMap {
             case v: AnyRef ⇒ resolveLocal(Some(v), p.rest(subPath))
           }
         }.find(_ != None)
@@ -84,16 +75,21 @@ trait Environment extends Environmental {
         }
         val mapped = p.candidates.map {
           case subPath ⇒
-            val sp = subPath
-            val ns = nodes \ subPath.literal
-            val map = ns.flatMap {
+            val map = (nodes \ subPath.value).flatMap {
               case v: AnyRef ⇒
                 val local = resolveLocal(Some(v), p.rest(subPath))
                 local
             }
             flatten(map)
         }
-        val found = mapped.find(_.nonEmpty)
+        val found = mapped.find(_.nonEmpty).orElse {
+          if (!p.isSingleton) None
+          else {
+            val attribute: NodeSeq = nodes \ ("@" + p.value)
+            if (attribute.isEmpty) None
+            else Some(attribute.text)
+          }
+        }
         if (found.isEmpty) None
         else {
           val flattened = flatten(found)
@@ -113,45 +109,47 @@ trait Environment extends Environmental {
         case _ ⇒ throw new IllegalArgumentException("Unknown owner or path [owner: " + owner + ", path: " + path + "].")
     }
   }
-  private[stencil] def traverseValue(value: Option[AnyRef]): Seq[Environment] = traverseValue(null, value)
-  private[stencil] def traverseValue(name: String, value: Option[AnyRef]): Seq[Environment] = value match {
-    case null ⇒ Seq.empty
-    case None ⇒ Seq.empty
-    case Some(java.lang.Boolean.FALSE) ⇒ Seq.empty
-    case Some(null) ⇒ Seq.empty
-    case Some(None) ⇒ Seq.empty
-    case Some("") ⇒ Seq.empty
-    case Some(t: Traversable[AnyRef]) if false ⇒
-      t.map { o =>
-        if (name != null) Environment(name → o)
-        else this
-      }.toSeq
-      /*
-    case Some(v) if false =>
-      if (name != null) Seq(SubEnvironment(Some(this), name → v))
-      else Seq(this)
-      */
+  def traverseValueMatcher: PartialFunction[(String, Option[AnyRef]), Seq[Environment]] = {
+      case (_, null) ⇒ Seq.empty
+      case (_, None) ⇒ Seq.empty
+      case (_, Some(java.lang.Boolean.FALSE)) ⇒ Seq.empty
+      case (_, Some(null)) ⇒ Seq.empty
+      case (_, Some(None)) ⇒ Seq.empty
+      case (_, Some("")) ⇒ Seq.empty
   }
+  private[stencil] def traverseValue(value: Option[AnyRef]): Seq[Environment] = traverseValue(null, value)
+  private[stencil] def traverseValue(name: String, value: Option[AnyRef]): Seq[Environment] = traverseValueMatcher((name, value))
 }
-object Environment extends Environmental {
+object Environment {
   object Empty extends Environment {
     def lookup(name: String) = None
   }
 
-  case class Path(literal: String, separator: Option[String] = None) {
-    val dot = separator.getOrElse(".")
-    def components: Seq[String] = literal.split(dot).toSeq
+  def apply(nodes: NodeSeq): XmlEnvironment = new XmlEnvironment(Empty, nodes)
+  def apply(bindings: Map[String, AnyRef]): Environment = new MapEnvironment(Empty, bindings)
+  def apply(name: String, value: Option[AnyRef]): Environment = value match {
+    case Some(v) ⇒ new MapEnvironment(Empty, name -> v)
+    case None ⇒ new MapEnvironment(Empty, name -> null)
+  }
+  def apply(bindings: (String, AnyRef)*): Environment = new MapEnvironment(Empty, bindings: _*)
+
+  case class Path(private val literal: String, separator: Option[Char] = None) {
+    val dot = separator.getOrElse('.')
+    val value = literal
+    val components: Seq[String] = literal.split(dot).toSeq
+    val isSingleton = components.size == 1
+    def rest(literal: String): Option[Path] = rest(Path(literal))
+    def rest(path: Path): Option[Path] = {
+      if (this.literal == path.literal) None
+      else if ((value.startsWith(path.value + dot))) Some(Path(literal.substring(path.value.length + 1)))
+      else None
+    }
     def candidates: Seq[Path] = {
       def inner(rest: String, list: List[Path]): List[Path] = rest.lastIndexOf(dot) match {
         case -1 ⇒ Path(rest) :: list
         case index ⇒ inner(rest.substring(0, index), Path(rest) :: list)
       }
       inner(literal, Nil).reverse
-    }
-    def rest(literal: String): Option[Path] = rest(Path(literal))
-    def rest(path: Path): Option[Path] = {
-      if ((literal.startsWith(path.literal + dot))) Some(Path(literal.substring(path.literal.length + dot.length)))
-      else None
     }
   }
   object Path {
@@ -160,47 +158,22 @@ object Environment extends Environmental {
 }
 abstract class SubEnvironment(val parent: Environment) extends Environment {
   override def resolve(exp: String) = super.resolve(exp).orElse(parent.resolve(exp))
-  /*
-  def resolve(exp: String): Option[AnyRef] = {
-     if (exp.size > 1 && exp.charAt(0) == '\'' && exp.charAt(exp.length - 1) == '\'') resolveLiteral(exp)
-     else if (exp.size > 1 && exp.charAt(0) == '/' && exp.charAt(exp.length - 1) == '/') resolveReplace(exp)
-     else lookup(exp) match {
-      case None ⇒
-        resolveLocal(None, Some(Path(exp))) match {
-          case None ⇒ parent.resolve(exp)
-          case v ⇒ v
-        }
-      case v ⇒ v
-    }
-  }
-  */
 }
 case class MapEnvironment(override val parent: Environment, map: Map[String, AnyRef]) extends SubEnvironment(parent) {
   def this(parent: Environment, bindings: (String, AnyRef)*) = this(parent, bindings.toMap)
 
   def lookup(name: String) = map.get(name) match {
     case Some(null) ⇒ None
+    case Some(t: Traversable[AnyRef]) if (t.isEmpty) ⇒ None
     case o ⇒ o
   }
 
-  /*
-  //def sub(bindings: (String, AnyRef)*): Environment = SubEnvironment(Some(this), bindings: _*)
-  def traverseSub(name: String, t: Traversable[AnyRef]) = {
-    t.map { o =>
-      if (name != null) new MapEnvironment(this, name → o)
-      else this
-    }.toSeq
+  override def traverseValueMatcher = super.traverseValueMatcher.orElse {
+    case (null, Some(t: Traversable[AnyRef])) => Seq(this)
+    case (name, Some(t: Traversable[AnyRef])) ⇒ t.map { o => apply(name → o) }.toSeq
+    case (null, Some(v)) => Seq(this)
+    case (name, Some(v)) => Seq(apply(name → v))
   }
-
-  def traverseSub(name: String, v: AnyRef) = {
-    if (name != null) Seq(new MapEnvironment(this, name → v))
-    else Seq(this)
-  }
-  */
-}
-
-case class ReflectiveEnvironment(override val parent: Environment, instance: AnyRef, name: Option[String] = None) extends SubEnvironment(parent) {
-  def lookup(name: String) = null
 }
 
 case class XmlEnvironment(override val parent: Environment, nodes: NodeSeq, name: Option[String] = None) extends SubEnvironment(parent) {
@@ -214,41 +187,10 @@ case class XmlEnvironment(override val parent: Environment, nodes: NodeSeq, name
     }
     case ns ⇒ Some(ns)
   }
-  /*
-  def traverseSub(name: String, t: Traversable[AnyRef]) = {
-    t.map { o =>
-      if (name != null) XmlEnvironment(Some(this), o.asInstanceOf[NodeSeq], Some(name))
-      else this
-    }.toSeq
+  override def traverseValueMatcher = super.traverseValueMatcher.orElse {
+    case (null, Some(t: Traversable[AnyRef])) => Seq(this)
+    case (name, Some(t: Traversable[AnyRef])) ⇒ t.map { o => apply(o.asInstanceOf[NodeSeq]) }.toSeq
   }
 
-  def traverseSub(name: String, o: AnyRef) = {
-    if (name != null) Seq(XmlEnvironment(Some(this), o.asInstanceOf[NodeSeq], Some(name)))
-    else Seq(this)
-  }
-  */
-
-  /*
-  override def resolveLocal(owner: Option[AnyRef], path: Option[Path]): Option[AnyRef] = super.resolveLocal(owner, path).orElse((owner, path) match {
-    case (Some(nodes: NodeSeq), Some(p)) =>
-      val mapped = p.candidates.flatMap {
-        case subPath ⇒
-          val sp = subPath
-          val ns = nodes \ subPath.literal
-          val map = ns.flatMap {
-            case v: AnyRef ⇒
-              val local = resolveLocal(Some(v), p.rest(subPath))
-              local
-          }
-          map
-      }
-      var found = mapped.collect {
-        case Some(v) => v
-        case s: Seq[_] => s
-      }
-      if (found.isEmpty) None
-      else Some(found)
-    case (o, p) => None
-  })
-  */
+  override def toString = name.map("\"" + _ + "\": ").getOrElse("") + nodes.toString()
 }

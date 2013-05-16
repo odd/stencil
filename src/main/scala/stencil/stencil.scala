@@ -8,7 +8,7 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
   def this(reader: Reader) = this(reader, Stencil.parse(reader))
   def withTransformer(transformer: Transformer): Stencil = new Stencil(reader, tree, transformer.orElse(defaultTransformer))
   def apply(bindings: (String, AnyRef)*): String = {
-    val environment = EmptyEnvironment.bind(bindings: _*)
+    val environment = Environment(bindings: _*)
     implicit val writer = new StringWriter()
     tree.contents.foreach { n ⇒ apply(n, environment) }
     writer.getBuffer.toString
@@ -52,7 +52,7 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
               apply(
                 tag.copy(
                   directives = directives.tail),
-                environment.bind(name, transformer(transform → environment.resolve(expression))))
+                environment(name, transformer(transform → environment.resolve(expression))))
             case d @ Set(transform, name, expression) =>
               environment.resolve(expression) match {
                 case Some((p: String, Some(v: AnyRef))) ⇒
