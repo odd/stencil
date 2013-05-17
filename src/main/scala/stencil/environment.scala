@@ -14,6 +14,7 @@ trait Environment {
   def apply(exp: String): Seq[Environment] = traverseValue(Path(exp).components.last, resolve(exp))
   def apply(name: String, exp: String): Seq[Environment] = traverseValue(name, resolve(exp))
   def apply(nodes: NodeSeq): XmlEnvironment = new XmlEnvironment(this, nodes)
+  def apply(name: String, nodes: NodeSeq): XmlEnvironment = new XmlEnvironment(this, nodes, Some(name))
   def apply(bindings: Map[String, AnyRef]): Environment = new MapEnvironment(this, bindings)
   def apply(name: String, value: Option[AnyRef]): Environment = value match {
     case Some(v) ⇒ new MapEnvironment(this, name -> v)
@@ -31,7 +32,87 @@ trait Environment {
     val replacement = e.substring(index + 1)
     Some((pattern, resolve(replacement)))
   }
+  private[stencil] def flatten(o: AnyRef): Option[AnyRef] = o match {
+    case null => None
+    case None => None
+    case xs: Traversable[AnyRef] if (xs.isEmpty) => None
+    case Some(v: AnyRef) => flatten(v)
+    case ns: NodeSeq => Some(ns)
+    //case xs: Traversable[AnyRef] if (xs.size == 1) => flatten(xs.head)
+    //case xs: Traversable[AnyRef] => Some(xs.flatMap(flatten))
+    case x => Some(x)
+  }
   private[stencil] def resolveLocal(owner: Option[AnyRef], path: Option[Path]): Option[AnyRef] = {
+    (flatten(owner), path) match {
+      case (None, None) ⇒ None
+      case (Some(o), None) ⇒ Some(o)
+      case (x, Some(p)) if (x == None || x == null) ⇒
+        val candidates = p.candidates
+        val mapped = candidates.flatMap { subPath =>
+          val subPathValue = subPath.value
+          val value = lookup(subPathValue)
+          value.map { v ⇒
+            val rest = p.rest(subPath)
+            resolveLocal(Some(v), rest)
+          }
+        }
+        val best = mapped.find(_ != None)
+        best.getOrElse(None)
+      case (Some(m: Map[String, _]), Some(p)) ⇒
+        p.candidates.flatMap {
+          case subPath ⇒ m.get(subPath.value).flatMap {
+            case v: AnyRef ⇒ resolveLocal(Some(v), p.rest(subPath))
+          }
+        }.find(_ != None)
+      case (Some(nodes: NodeSeq), Some(p)) =>
+        val mapped = p.candidates.map {
+          case subPath ⇒
+            val map = (nodes \ subPath.value).flatMap {
+              case v: AnyRef ⇒
+                val local = resolveLocal(Some(v), p.rest(subPath))
+                local
+            }
+            flatten(map)
+        }
+        val found = mapped.find(_.nonEmpty).orElse {
+          if (!p.isSingleton) None
+          else {
+            val attribute: NodeSeq = nodes \ ("@" + p.value)
+            if (attribute.isEmpty) None
+            else Some(attribute.text)
+          }
+        }
+        if (found.isEmpty) None
+        else {
+          val flattened = flatten(found)
+          flattened
+        }
+      case (Some(t: Traversable[AnyRef]), Some(p)) ⇒
+        val candidates = p.candidates.init
+        val mapped = candidates.flatMap { subPath =>
+          val value = resolveLocal(Some(t), Some(subPath))
+          value.map { v ⇒
+            val rest = p.rest(subPath).filterNot(!_.isSingleton)
+            resolveLocal(Some(v), rest)
+          }
+        }
+        val best = mapped.find(_ != None)
+        best.getOrElse(None)
+      case (Some(o), Some(p)) ⇒
+        val result = p.components.headOption.flatMap {
+          c =>
+            try {
+              val local = resolveLocal(Some(o.getClass.getMethod(c).invoke(o)), p.rest(c))
+              local
+            } catch {
+              case e: NoSuchMethodException ⇒ None
+            }
+        }
+        result
+        case _ ⇒ throw new IllegalArgumentException("Unknown owner or path [owner: " + owner + ", path: " + path + "].")
+    }
+  }
+  private[stencil] def resolveLocal2(owner: Option[AnyRef], path: Option[Path]): Option[AnyRef] = {
     (owner, path) match {
       case (None, None) ⇒ None
       case (Some(None), _) ⇒ None
@@ -58,21 +139,6 @@ trait Environment {
       case (Some(Some(o: AnyRef)), Some(p)) ⇒
         resolveLocal(Some(o), path)
       case (Some(nodes: NodeSeq), Some(p)) =>
-        def flatten(o: AnyRef): Option[AnyRef] = o match {
-          case null => None
-          case None => None
-          case xs: Traversable[AnyRef] if (xs.isEmpty) => None
-          case Some(v: AnyRef) => flatten(v)
-          case ns: NodeSeq => Some(ns)
-          case xs: Traversable[AnyRef] if (xs.size == 1) => {
-            flatten(xs.head)
-          }
-          case xs: Traversable[AnyRef] => {
-            val map = xs.flatMap(flatten)
-            Some(map)
-          }
-          case x => Some(x)
-        }
         val mapped = p.candidates.map {
           case subPath ⇒
             val map = (nodes \ subPath.value).flatMap {
@@ -177,19 +243,24 @@ case class MapEnvironment(override val parent: Environment, map: Map[String, Any
 }
 
 case class XmlEnvironment(override val parent: Environment, nodes: NodeSeq, name: Option[String] = None) extends SubEnvironment(parent) {
-  def lookup(name: String) = nodes(n => this.name.exists(_ == n.label) || n.label == name) match {
-    case NodeSeq.Empty ⇒ (this.name.map(nodes \ _), nodes \ name) match {
+  def lookup(name: String) = {
+    val matchingNodes = nodes.theSeq.filter(n => this.name.exists(_ == n.label) || n.label == name)
+    if (matchingNodes.isEmpty) (this.name.map(nodes \ _), nodes \ name) match {
       case (None, NodeSeq.Empty) ⇒ None
       case (Some(NodeSeq.Empty), NodeSeq.Empty) ⇒ None
       case (Some(NodeSeq.Empty), ns) ⇒ Some(ns)
       case (Some(ns), _) ⇒ Some(ns)
       case (_, ns) ⇒ Some(ns)
-    }
-    case ns ⇒ Some(ns)
+    } else Some(matchingNodes)
   }
   override def traverseValueMatcher = super.traverseValueMatcher.orElse {
+    //case (null, Some(ns: NodeSeq)) => Seq(this)
+    //case (name, Some(ns: NodeSeq)) => Seq(apply(name, nodes))
     case (null, Some(t: Traversable[AnyRef])) => Seq(this)
-    case (name, Some(t: Traversable[AnyRef])) ⇒ t.map { o => apply(o.asInstanceOf[NodeSeq]) }.toSeq
+    case (name, Some(t: Traversable[AnyRef])) ⇒ {
+      val t2 = t
+      t2.map { o => apply(name, o.asInstanceOf[NodeSeq]) }.toList
+    }
   }
 
   override def toString = name.map("\"" + _ + "\": ").getOrElse("") + nodes.toString()

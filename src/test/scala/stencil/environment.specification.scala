@@ -101,11 +101,12 @@ class EnvironmentSpecification extends FreeSpec {
         assert(Environment(xml).resolve("person.alias") === None)
       }
       "should resolve method expressions to their bound value in the nearest enclosing environment" in {
-        assert(Environment(xml).resolve("person.name.first") === Some("Kalle"))
-        val friends = Environment(xml)("person.friends").head
+        val env = Environment(xml)
+        assert(env.resolve("person.name.first") === Some(List("Kalle")))
+        val friends = env("person.friends").head
         val persons1: Seq[Environment] = friends("person")
         assert(persons1.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))
-        val persons2: Seq[Environment] = Environment(xml)("person.friends.person")
+        val persons2: Seq[Environment] = env("person.friends.person")
         assert(persons2.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))
         //val persons3: Seq[Environment] = Environment(xml)("person.friends.*")
         //assert(persons3.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))

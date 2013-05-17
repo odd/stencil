@@ -2,13 +2,15 @@ package stencil
 
 import util.matching.Regex.{MatchData, Match}
 import java.io.{Writer, StringWriter, StringReader, Reader}
+import scala.xml.NodeSeq
 
 class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Stencil.Transformer = Stencil.defaultTransformer) {
   import Stencil._
   def this(reader: Reader) = this(reader, Stencil.parse(reader))
   def withTransformer(transformer: Transformer): Stencil = new Stencil(reader, tree, transformer.orElse(defaultTransformer))
-  def apply(bindings: (String, AnyRef)*): String = {
-    val environment = Environment(bindings: _*)
+  def apply(bindings: (String, AnyRef)*): String = apply(Environment(bindings: _*))
+  def apply(nodes: NodeSeq): String = apply(Environment(nodes))
+  def apply(environment: Environment): String = {
     implicit val writer = new StringWriter()
     tree.contents.foreach { n ⇒ apply(n, environment) }
     writer.getBuffer.toString
@@ -317,26 +319,6 @@ object Stencil {
             stack = stack.tail
           } else if (m.group(4) == null) {
             stack ::= (m.group(2), m)
-          }
-          last = m
-      }
-      start += last.end
-    }
-    if (last != null) (start - (last.end - last.start), start)
-    else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
-  }
-  private def findBodyEndIndices0(data: CharSequence, offset: Int, tagName: String): (Int, Int) = {
-    var start = offset
-    var level = 1
-    var last: Match = null
-    while (level > 0 && start < data.length) {
-      StartOrCloseTag.findFirstMatchIn(data.subSequence(start, data.length)) match {
-        case None ⇒ throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
-        case Some(m) ⇒
-          if (m.group(1) == "/")
-            level -= 1
-          else if (m.group(4) == null) {
-            level += 1
           }
           last = m
       }
