@@ -35,7 +35,7 @@ trait Environment {
   private[stencil] def flatten(o: AnyRef): Option[AnyRef] = o match {
     case null => None
     case None => None
-    case xs: Traversable[AnyRef] if (xs.isEmpty) => None
+    case xs: Traversable[AnyRef] if xs.isEmpty => None
     case Some(v: AnyRef) => flatten(v)
     case ns: NodeSeq => Some(ns)
     //case xs: Traversable[AnyRef] if (xs.size == 1) => flatten(xs.head)
@@ -46,70 +46,104 @@ trait Environment {
     (flatten(owner), path) match {
       case (None, None) ⇒ None
       case (Some(o), None) ⇒ Some(o)
-      case (x, Some(p)) if (x == None || x == null) ⇒
+      case (x, Some(p)) if x.isEmpty || x == null ⇒
         val candidates = p.candidates
-        val mapped = candidates.flatMap { subPath =>
+        val mapped: Seq[Option[AnyRef]] = candidates.map { subPath =>
           val subPathValue = subPath.value
           val value = lookup(subPathValue)
-          value.map { v ⇒
+          value.flatMap { v ⇒
             val rest = p.rest(subPath)
             resolveLocal(Some(v), rest)
           }
         }
-        val best = mapped.find(_ != None)
-        best.getOrElse(None)
-      case (Some(m: Map[String, _]), Some(p)) ⇒
-        p.candidates.flatMap {
-          case subPath ⇒ m.get(subPath.value).flatMap {
-            case v: AnyRef ⇒ resolveLocal(Some(v), p.rest(subPath))
-          }
-        }.find(_ != None)
-      case (Some(nodes: NodeSeq), Some(p)) =>
-        val mapped = p.candidates.map {
-          case subPath ⇒
-            val map = (nodes \ subPath.value).flatMap {
-              case v: AnyRef ⇒
-                val local = resolveLocal(Some(v), p.rest(subPath))
-                local
+        val best: Option[AnyRef] = mapped.collectFirst {
+          case Some(x: AnyRef) => x
+        }
+        best
+      case (Some(o), Some(p)) =>
+        val a: PartialFunction[Option[AnyRef], Option[AnyRef]] = {
+          case Some(m: Map[String, _]) ⇒
+            val results: Seq[Option[AnyRef]] = p.candidates.map {
+              case subPath ⇒ m.get(subPath.value).flatMap {
+                case v: AnyRef ⇒ resolveLocal(Some(v), p.rest(subPath))
+              }
             }
-            flatten(map)
-        }
-        val found = mapped.find(_.nonEmpty).orElse {
-          if (!p.isSingleton) None
-          else {
-            val attribute: NodeSeq = nodes \ ("@" + p.value)
-            if (attribute.isEmpty) None
-            else Some(attribute.text)
-          }
-        }
-        if (found.isEmpty) None
-        else {
-          val flattened = flatten(found)
-          flattened
-        }
-      case (Some(t: Traversable[AnyRef]), Some(p)) ⇒
-        val candidates = p.candidates.init
-        val mapped = candidates.flatMap { subPath =>
-          val value = resolveLocal(Some(t), Some(subPath))
-          value.map { v ⇒
-            val rest = p.rest(subPath).filterNot(!_.isSingleton)
-            resolveLocal(Some(v), rest)
-          }
-        }
-        val best = mapped.find(_ != None)
-        best.getOrElse(None)
-      case (Some(o), Some(p)) ⇒
-        val result = p.components.headOption.flatMap {
-          c =>
-            try {
-              val local = resolveLocal(Some(o.getClass.getMethod(c).invoke(o)), p.rest(c))
-              local
-            } catch {
-              case e: NoSuchMethodException ⇒ None
+            results.collectFirst {
+              case Some(x: AnyRef) => x
             }
         }
-        result
-        case _ ⇒ throw new IllegalArgumentException("Unknown owner or path [owner: " + owner + ", path: " + path + "].")
+        val b: PartialFunction[Option[AnyRef], Option[AnyRef]] = {
+          case Some(nodes: NodeSeq) =>
+            val mapped = p.candidates.map {
+              case subPath ⇒
+                val map = (nodes \ subPath.value).flatMap {
+                  case v: AnyRef ⇒
+                    val local = resolveLocal(Some(v), p.rest(subPath))
+                    local
+                }
+                flatten(map)
+            }
+            val found = mapped.find(_.isDefined).orElse {
+              if (!p.isSingleton) None
+              else {
+                val attribute: NodeSeq = nodes \ ("@" + p.value)
+                if (attribute.isEmpty) None
+                else Some(attribute.text)
+              }
+            }
+            if (found.isEmpty) None
+            else {
+              val flattened: Option[AnyRef] = flatten(found)
+              flattened
+            }
+        }
+        val c: PartialFunction[Option[AnyRef], Option[AnyRef]] = {
+          case Some(t: Traversable[AnyRef]) ⇒
+            val candidates = p.candidates.init
+            val mapped: Seq[Option[AnyRef]] = candidates.map { subPath =>
+              val value = resolveLocal(Some(t), Some(subPath))
+              value.flatMap { v ⇒
+                val rest = p.rest(subPath).filterNot(!_.isSingleton)
+                println("c(path: " + path + ", rest: " + rest + ")")
+                resolveLocal(Some(v), rest)
+              }
+            }
+            val best = mapped.collectFirst {
+              case Some(x: AnyRef) => x
+            }
+            //best.getOrElse(None)
+            best
+        }
+        val d: PartialFunction[Option[AnyRef], Option[AnyRef]] = {
+          case Some(o) ⇒
+            val result: Option[AnyRef] = p.components.headOption.flatMap {
+              c =>
+                try {
+                  val method = o.getClass.getMethod(c)
+                  val result = method.invoke(o)
+                  val local = resolveLocal(Some(result), p.rest(c))
+                  local
+                } catch {
+                  case e: NoSuchMethodException ⇒ None
+                }
+            }
+            result
+        }
+        val e: PartialFunction[Option[AnyRef], Option[AnyRef]] = {
+          case _ ⇒
+            // new IllegalArgumentException("### Unknown owner or path [owner: " + owner + ", path: " + path + "].").printStackTrace()
+            println("Path unresolvable for owner [owner: " + owner.take(60) + ", path: " + path + "].")
+            None
+        }
+        def firstDefinedResult(fs: PartialFunction[Option[AnyRef], Option[AnyRef]]*)(opt: Option[AnyRef]): Option[AnyRef] = {
+          (for {
+            f <- fs if f.isDefinedAt(opt)
+            result = f(opt)
+          } yield result).collectFirst {
+            case Some(x: AnyRef) => x
+          }
+        }
+        firstDefinedResult(a, b, c, d, e)(Some(o))
     }
   }
   private[stencil] def resolveLocal2(owner: Option[AnyRef], path: Option[Path]): Option[AnyRef] = {
@@ -118,7 +152,7 @@ trait Environment {
       case (Some(None), _) ⇒ None
       case (Some(Some(o: AnyRef)), None) ⇒ Some(o)
       case (Some(o), None) ⇒ Some(o)
-      case (x, Some(p)) if (x == None || x == null) ⇒
+      case (x, Some(p)) if x.isEmpty || x == null ⇒
         val candidates = p.candidates
         val mapped = candidates.flatMap { subPath =>
           val subPathValue = subPath.value
@@ -128,7 +162,7 @@ trait Environment {
             resolveLocal(Some(v), rest)
           }
         }
-        val best = mapped.find(_ != None)
+        val best = mapped.find(_.isDefined)
         best.getOrElse(None)
       case (Some(m: Map[String, _]), Some(p)) ⇒
         p.candidates.flatMap {
@@ -148,7 +182,7 @@ trait Environment {
             }
             flatten(map)
         }
-        val found = mapped.find(_.nonEmpty).orElse {
+        val found = mapped.find(_.isDefined).orElse {
           if (!p.isSingleton) None
           else {
             val attribute: NodeSeq = nodes \ ("@" + p.value)
@@ -172,7 +206,7 @@ trait Environment {
             }
         }
         result
-        case _ ⇒ throw new IllegalArgumentException("Unknown owner or path [owner: " + owner + ", path: " + path + "].")
+      case _ ⇒ throw new IllegalArgumentException("Unknown owner or path [owner: " + owner + ", path: " + path + "].")
     }
   }
   def traverseValueMatcher: PartialFunction[(String, Option[AnyRef]), Seq[Environment]] = {
@@ -205,9 +239,19 @@ object Environment {
     val components: Seq[String] = literal.split(dot).toSeq
     val isSingleton = components.size == 1
     def rest(literal: String): Option[Path] = rest(Path(literal))
+    /*
     def rest(path: Path): Option[Path] = {
       if (this.literal == path.literal) None
-      else if ((value.startsWith(path.value + dot))) Some(Path(literal.substring(path.value.length + 1)))
+      else if (value.startsWith(path.value + dot)) Some(Path(literal.substring(path.value.length + 1)))
+      else None
+    }
+    */
+    def rest(path: Path): Option[Path] = {
+      if (this.components.startsWith(path.components)) {
+        val rest = this.components.drop(path.components.length).mkString(dot.toString)
+        println(value + ".rest(" + path.value + "): " + rest)
+        Some(Path(rest))
+      }
       else None
     }
     def candidates: Seq[Path] = {
@@ -230,7 +274,7 @@ case class MapEnvironment(override val parent: Environment, map: Map[String, Any
 
   def lookup(name: String) = map.get(name) match {
     case Some(null) ⇒ None
-    case Some(t: Traversable[AnyRef]) if (t.isEmpty) ⇒ None
+    case Some(t: Traversable[AnyRef]) if t.isEmpty ⇒ None
     case o ⇒ o
   }
 
