@@ -247,12 +247,12 @@ object Environment {
     }
     */
     def rest(path: Path): Option[Path] = {
-      if (this.components.startsWith(path.components)) {
+      if (this.literal == path.literal) None
+      else if (this.components.startsWith(path.components)) {
         val rest = this.components.drop(path.components.length).mkString(dot.toString)
         println(value + ".rest(" + path.value + "): " + rest)
         Some(Path(rest))
-      }
-      else None
+      } else None
     }
     def candidates: Seq[Path] = {
       def inner(rest: String, list: List[Path]): List[Path] = rest.lastIndexOf(dot) match {
