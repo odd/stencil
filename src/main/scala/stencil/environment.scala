@@ -99,6 +99,7 @@ trait Environment {
         }
         val c: PartialFunction[Option[AnyRef], Option[AnyRef]] = {
           case Some(t: Traversable[AnyRef]) ⇒
+            println("c ## p: " + p)
             val candidates = p.candidates.init
             println("c ## candidates: " + candidates)
             val mapped: Seq[Option[AnyRef]] = candidates.map { subPath =>
