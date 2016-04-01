@@ -100,11 +100,14 @@ trait Environment {
         val c: PartialFunction[Option[AnyRef], Option[AnyRef]] = {
           case Some(t: Traversable[AnyRef]) ⇒
             val candidates = p.candidates.init
+            println("c ## candidates: " + candidates)
             val mapped: Seq[Option[AnyRef]] = candidates.map { subPath =>
+              println("c ## subPath: " + subPath)
               val value = resolveLocal(Some(t), Some(subPath))
+              println("c ## value: " + value)
               value.flatMap { v ⇒
                 val rest = p.rest(subPath).filterNot(!_.isSingleton)
-                println("c(path: " + path + ", rest: " + rest + ")")
+                println("c ## rest: " + rest)
                 resolveLocal(Some(v), rest)
               }
             }
