@@ -13,6 +13,9 @@ class EnvironmentSpecification extends FreeSpec {
       "should resolve quoted literals to strings" in {
         assert(Environment.Empty.resolve("'Kalle'") === Some("Kalle"))
       }
+      "should resolve conditional operator expressions to positive expression if non empty" in {
+        assert(Environment.Empty.resolve("'Kalle'?'Pelle':'Nisse'") === Some("Pelle"))
+      }
     }
     "when consisting of a map" - {
       "should resolve simple expressions to their bound value" in {
@@ -81,6 +84,15 @@ class EnvironmentSpecification extends FreeSpec {
         assert(env("person.friends").size === 2)
         assert(env("friend", "person.friends").map(_.resolve("friend.alias")) === Seq(Some("Slick"), Some("Animal")))
       }
+      "should resolve conditional values to correct alternative" in {
+        val kalle = Person(name = Name("Kalle", "Blomkvist"), properties = Map("age" → "30"))
+        assert(Environment("person" → kalle).resolve("person.properties.age?'known':'unknown'") === Some("known"))
+        assert(Environment("person" → kalle).resolve("person.properties.x?'known':'unknown'") === Some("unknown"))
+        assert(Environment("person" → kalle).resolve("person.properties.age?:'unknown'") === Some("30"))
+        assert(Environment("person" → kalle).resolve("person.properties.x?:'unknown'") === Some("unknown"))
+        assert(Environment("person" → kalle).resolve("person.properties.age?person.name.first:'unknown'") === Some("Kalle"))
+        assert(Environment("person" → kalle).resolve("person.properties.x?person.name.first:person.name.last") === Some("Blomkvist"))
+      }
     }
 
     "when consisting of XML nodes" - {
@@ -103,11 +115,12 @@ class EnvironmentSpecification extends FreeSpec {
       "should resolve method expressions to their bound value in the nearest enclosing environment" in {
         val env = Environment(xml)
         assert(env.resolve("person.name.first") === Some(List("Kalle")))
-        val friends = env("person.friends").head
-        val persons1: Seq[Environment] = friends("person")
-        assert(persons1.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))
+        val friends = env("person.friends")
+        val friendsHead = friends.head
+        val persons1: Seq[Environment] = friendsHead("friends.person")
+        assert(persons1.map(p => p.resolve("person.name.first")) === Seq(Some(List("Nisse")), Some(List("Pelle"))))
         val persons2: Seq[Environment] = env("person.friends.person")
-        assert(persons2.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))
+        assert(persons2.map(_.resolve("person.name.first")) === Seq(Some(List("Nisse", "Pelle"))))
         //val persons3: Seq[Environment] = Environment(xml)("person.friends.*")
         //assert(persons3.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))
       }

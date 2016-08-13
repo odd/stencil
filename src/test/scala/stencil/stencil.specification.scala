@@ -9,7 +9,7 @@ class StencilSpecification extends FunSuite {
   test("literals should result in themselves") {
     assert("<name>Kalle</name>", "<name>Kalle</name>")
   }
-  test("let directives should bind within thier element") {
+  test("let directives should bind within their element") {
     assert("""
       <span x:let-name="'Pelle'">
         <name x:set="name">Kalle</name>
@@ -128,7 +128,7 @@ class StencilSpecification extends FunSuite {
       </span>""", """
       """, "persons" → Nil)
   }
-  case class Person(name: String, company: String)
+  case class Person(name: String, company: String, old: Boolean = false)
   test("do directives should repeat their target element the correct number of times") {
     assert("""
       <prefix/>
@@ -149,6 +149,13 @@ class StencilSpecification extends FunSuite {
         <company>FOOBAR</company>
       </person>
       <suffix/>""", "persons" → List(Person("Lasse", "FOO"), Person("Pelle", "BAR"), Person("Nisse", "FOOBAR")))
+  }
+  test("conditional operator should pick positive case for non empty conditions") {
+    assert("""
+      <person x:do-person="persons" x:set-name="person.name" x:set-active="person.old?'false':'true'" name="Kalle" active="unknown"/>
+      """, """
+      <person name="Lasse" active="false"/><person name="Pelle" active="true"/>
+      """, "persons" → List(Person("Lasse", "FOO", old = true), Person("Pelle", "BAR")))
   }
   test("missing end tags should throw exception") {
     intercept[IllegalStateException](Stencil("""

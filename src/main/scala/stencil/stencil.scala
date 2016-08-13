@@ -273,29 +273,29 @@ object Stencil {
     for (m ← matches) {
       if (m.group(1) == "x") {
         directives ::= (m.group(2) match {
-          case name if (name.startsWith("let--")) ⇒
+          case name if name.startsWith("let--") ⇒
             val suffix = name.substring("let--".length)
             val index = suffix.indexOf('-')
             if (index == -1) throw new IllegalStateException("Let directive with transform and empty name encountered [" + name + "=\"" + m.group(3) + "\"].")
             Let(suffix.substring(0, index), suffix.substring(index + 1), m.group(3))
-          case name if (name.startsWith("set--")) ⇒
+          case name if name.startsWith("set--") ⇒
             val suffix = name.substring("set--".length)
             val index = suffix.indexOf('-')
             if (index > -1) Set(suffix.substring(0, index), suffix.substring(index + 1), m.group(3))
             else SetBody(suffix, m.group(3))
-          case name if (name.startsWith("do--")) ⇒
+          case name if name.startsWith("do--") ⇒
             val suffix = name.substring("do--".length)
             val index = suffix.indexOf('-')
             if (index > -1) Do(suffix.substring(0, index), suffix.substring(index + 1), m.group(3))
             else DoBody(suffix, m.group(3))
-          case name if (name.startsWith("let-")) ⇒
+          case name if name.startsWith("let-") ⇒
             Let(null, name.substring("let-".length), m.group(3))
-          case name if (name.startsWith("set-")) ⇒
+          case name if name.startsWith("set-") ⇒
             Set(null, name.substring("set-".length), m.group(3))
-          case name if (name.startsWith("do-")) ⇒
+          case name if name.startsWith("do-") ⇒
             Do(null, name.substring("do-".length), m.group(3))
-          case name if (name == "set") ⇒ SetBody(null, m.group(3))
-          case name if (name == "do") ⇒ DoBody(null, m.group(3))
+          case name if name == "set" ⇒ SetBody(null, m.group(3))
+          case name if name == "do" ⇒ DoBody(null, m.group(3))
           case _ ⇒ throw new IllegalStateException("Unknown directive encountered [" + m.group(0) + "]")
         })
       } else {
