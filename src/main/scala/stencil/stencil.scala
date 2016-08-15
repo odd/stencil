@@ -204,7 +204,7 @@ object Stencil {
   case class Tag(name: String, attributes: Seq[(String, String)], directives: Seq[Directive], contents: Seq[Node] = Seq.empty) extends Node with Container
 
   type =>?[-A, +B] = PartialFunction[A, B]
-  type Transformer = (Pair[String, Option[AnyRef]]) =>? Option[AnyRef]
+  type Transformer = (String, Option[AnyRef]) =>? Option[AnyRef]
   val defaultTransformer: Transformer = { case (_, value) ⇒ value }
 
   sealed trait Directive
