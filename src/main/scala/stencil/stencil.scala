@@ -365,7 +365,7 @@ case class FileSystemStencilFactory(root: File) extends StencilFactory {
   val cache = mutable.Map[File, (Stencil, Long)]()
 
   override def produce(path: String): Stencil = produce(new File(root, path))
-  private def produce(file: File): Stencil = {
+  def produce(file: File): Stencil = {
     require(file.exists(), "File not found: " + file.getPath)
     fetch(file)
   }
