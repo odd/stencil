@@ -359,7 +359,7 @@ object MapStencilFactory extends StencilFactory {
   }
 }
 
-class FileSystemStencilFactory(val root: File) extends StencilFactory {
+case class FileSystemStencilFactory(root: File) extends StencilFactory {
   import collection.mutable
 
   val cache = mutable.Map[File, (Stencil, Long)]()
