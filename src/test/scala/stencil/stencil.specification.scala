@@ -202,6 +202,14 @@ class StencilSpecification extends FunSuite {
       """, "person" → "Pelle")
   }
   */
+  test("include should include raw data") {
+    val personInfoStencil = MapStencilFactory.produce("person/info", """<person-info x:set-name="person.name" x:set-old="person.old"/>""")
+    assert("""
+      <person x:do-person="persons"><name x:include="person/info"/></person>
+           """, """
+      <person><person-info name="Lasse" old="true"/></person><person><person-info name="Pelle" old="false"/></person>
+           """, "persons" → List(Person("Lasse", "FOO", old = true), Person("Pelle", "BAR")))
+  }
 
   private def assert(actual: String, expected: String, bindings: (String, AnyRef)*) {
     assert(Stencil(actual).apply(bindings: _*) === expected)

@@ -1,175 +1,20 @@
 package stencil
 
-import util.matching.Regex.{MatchData, Match}
-import java.io.{Writer, StringWriter, StringReader, Reader}
+import util.matching.Regex.{Match, MatchData}
+import java.io._
+
 import scala.xml.NodeSeq
 
-class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Stencil.Transformer = Stencil.defaultTransformer) {
+class Stencil private (private[stencil] val tree: Stencil.Tree)(implicit factory: StencilFactory, transformer: Stencil.Transformer) {
   import Stencil._
-  def this(reader: Reader) = this(reader, Stencil.parse(reader))
-  def withTransformer(transformer: Transformer): Stencil = new Stencil(reader, tree, transformer.orElse(defaultTransformer))
+  def this(reader: Reader)(implicit factory: StencilFactory, transformer: Stencil.Transformer) = this(Stencil.parse(reader))
+  //def withTransformer(transformer: Transformer): Stencil = new Stencil(tree)(transformer.orElse(defaultTransformer))
   def apply(bindings: (String, AnyRef)*): String = apply(Environment(bindings: _*))
   def apply(nodes: NodeSeq): String = apply(Environment(nodes))
   def apply(environment: Environment): String = {
     implicit val writer = new StringWriter()
-    tree.contents.foreach { n ⇒ apply(n, environment) }
+    tree.contents.foreach { n ⇒ write(n, environment) }
     writer.getBuffer.toString
-  }
-  private def apply(node: Node, environment: Environment)(implicit writer: Writer) {
-    node match {
-      case Text(data) ⇒
-        write(data)
-      case tag @ Tag(name, attributes, directives, contents) =>
-        if (directives.isEmpty) {
-          write('<')
-          write(name)
-          attributes.foreach {
-            case (name, value) ⇒
-              write(' ')
-              write(name)
-              write('=')
-              write('"')
-              write(value)
-              write('"')
-          }
-          if (contents.isEmpty) {
-            write('/')
-            write('>')
-          } else {
-            write('>')
-            contents.foreach(n ⇒ apply(n, environment))
-            write('<')
-            write('/')
-            write(name)
-            write('>')
-          }
-        } else {
-          directives.head match {
-            case d @ Namespace(prefix, uri) =>
-              apply(
-                tag.copy(
-                  directives = directives.tail),
-                environment)
-            case d @ Let(transform, name, expression) =>
-              apply(
-                tag.copy(
-                  directives = directives.tail),
-                environment(name, transformer(transform → environment.resolve(expression))))
-            case d @ Set(transform, name, expression) =>
-              environment.resolve(expression) match {
-                case Some((p: String, Some(v: AnyRef))) ⇒
-                  transformer(transform → Some(v)) match {
-                    case Some(value) =>
-                      attributes.find(_._1 == name).map(_._2.replace(p, value.toString)).foreach { replacedValue =>
-                        apply(
-                          tag.copy(
-                            attributes = attributes.filterNot(_._1 == name) :+ ((name, replacedValue)),
-                            directives = directives.tail),
-                          environment)
-                      }
-                    case None =>
-                      apply(
-                        tag.copy(
-                          attributes = attributes.filterNot(_._1 == name),
-                          directives = directives.tail),
-                        environment)
-                  }
-                case Some(v: AnyRef) ⇒
-                  transformer(transform → Some(v)) match {
-                    case Some(value) =>
-                      apply(
-                        tag.copy(
-                          attributes = attributes.filterNot(_._1 == name) :+ ((name, value.toString)),
-                          directives = directives.tail),
-                        environment)
-                    case None =>
-                      apply(
-                        tag.copy(
-                          attributes = attributes.filterNot(_._1 == name),
-                          directives = directives.tail),
-                        environment)
-                  }
-                case x ⇒
-                  val y = x
-                  apply(
-                    tag.copy(
-                      attributes = attributes.filterNot(_._1 == name),
-                      directives = directives.tail),
-                    environment)
-              }
-            case d @ SetBody(transform, expression) ⇒
-              environment.resolve(expression) match {
-                case Some((p: String, Some(v: AnyRef))) ⇒
-                  transformer(transform → Some(v)) match {
-                    case Some(value) =>
-                      apply(
-                        tag.copy(
-                          directives = directives.tail,
-                          contents = tag.contents.collect {
-                            case Text(data) ⇒ Text(data.replace(p, value.toString))
-                            case n ⇒ n
-                          }),
-                        environment)
-                    case None =>
-                      apply(
-                        tag.copy(
-                          directives = directives.tail),
-                        environment)
-                  }
-                case Some(v: AnyRef) ⇒
-                  transformer(transform → Some(v)) match {
-                    case Some(value) =>
-                      apply(
-                        tag.copy(
-                          directives = directives.tail,
-                          contents = Seq(Text(value.toString))),
-                        environment)
-                    case None =>
-                      apply(
-                        tag.copy(
-                          directives = directives.tail),
-                        environment)
-                  }
-                case x ⇒
-                  val y = x
-                  apply(
-                    tag.copy(
-                      directives = directives.tail),
-                    environment)
-              }
-              /*
-              apply(
-                tag.copy(
-                  directives = directives.tail,
-                  contents = Seq(Text())),
-                environment
-                )*/
-            case d @ Do(transform, name, expression) =>
-              environment.traverseValue(name, transformer(transform → environment.resolve(expression))).foreach { env =>
-                apply(
-                  tag.copy(
-                    directives = directives.tail),
-                  env)
-              }
-            case d @ DoBody(transform, expression) ⇒
-              environment.traverseValue(transformer(transform → environment.resolve(expression))).foreach { env =>
-                apply(
-                  tag.copy(
-                    directives = directives.tail),
-                  env)
-              }
-            case _ =>
-          }
-        }
-    }
-  }
-  private def write(c: Char)(implicit writer: Writer) {
-    writer.write(c)
-    writer.flush()
-  }
-  private def write(s: String)(implicit writer: Writer) {
-    writer.write(s)
-    writer.flush()
   }
   def format(node: Node): String = node match {
     case Text(data) ⇒ data
@@ -177,6 +22,7 @@ class Stencil private (reader: Reader, tree: Stencil.Tree, val transformer: Sten
       "<" + name + attributes.map {
         case (name, value) ⇒ " " + name + "=\"" + value + "\""
       }.mkString + directives.map {
+        case Namespace(prefix, uri) => " xmlns:x" + prefix + "=\"" + uri + "\""
         case Let(null, name, expression) ⇒ " x:let-" + name + "=\"" + expression + "\""
         case Set(null, name, expression) ⇒ " x:set-" + name + "=\"" + expression + "\""
         case Do(null, name, expression) ⇒ " x:do-" + name + "=\"" + expression + "\""
@@ -214,9 +60,13 @@ object Stencil {
   case class Do(transform: String, name: String, expression: String) extends Directive
   case class SetBody(transform: String, expression: String) extends Directive
   case class DoBody(transform: String, expression: String) extends Directive
+  case class Include(path: String) extends Directive
 
-  def apply(reader: Reader): Stencil = new Stencil(reader)
-  def apply(literal: String): Stencil = apply(new StringReader(literal))
+  def apply(literal: String): Stencil = fromString(literal)
+  def apply(reader: Reader): Stencil = fromReader(reader)
+
+  def fromString(literal: String)(implicit factory: StencilFactory = MapStencilFactory, transformer: Stencil.Transformer = defaultTransformer): Stencil = apply(new StringReader(literal))
+  def fromReader(reader: Reader)(implicit factory: StencilFactory = MapStencilFactory, transformer: Stencil.Transformer = defaultTransformer): Stencil = new Stencil(reader)
 
   val StartOrCloseTag = """<\s*(/)?([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?>""".r
   val DirectionTag = """<(?:\s*([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*(?:\s+(?:x:[\w_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))(?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?)>|(!--.*?--)>""".r
@@ -252,7 +102,7 @@ object Stencil {
         case None =>
           nodes ::= Text(data.subSequence(start, data.length).toString)
       }
-    } while (start < data.length && lastMatch != None)
+    } while (start < data.length && lastMatch.isDefined)
     nodes.reverse
   }
   private def asCharSequence(reader: Reader): CharSequence = {
@@ -296,6 +146,7 @@ object Stencil {
             Do(null, name.substring("do-".length), m.group(3))
           case name if name == "set" ⇒ SetBody(null, m.group(3))
           case name if name == "do" ⇒ DoBody(null, m.group(3))
+          case name if name == "include" => Include(m.group(3))
           case _ ⇒ throw new IllegalStateException("Unknown directive encountered [" + m.group(0) + "]")
         })
       } else {
@@ -326,6 +177,212 @@ object Stencil {
     }
     if (last != null) (start - (last.end - last.start), start)
     else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
+  }
+  private def write(node: Node, environment: Environment)(implicit factory: StencilFactory, transformer: Stencil.Transformer, writer: Writer) {
+    def t = transformer.orElse(defaultTransformer)
+    node match {
+      case Text(data) ⇒
+        write(data)
+      case tag @ Tag(name, attributes, directives, contents) =>
+        if (directives.isEmpty) {
+          write('<')
+          write(name)
+          attributes.foreach {
+            case (name, value) ⇒
+              write(' ')
+              write(name)
+              write('=')
+              write('"')
+              write(value)
+              write('"')
+          }
+          if (contents.isEmpty) {
+            write('/')
+            write('>')
+          } else {
+            write('>')
+            contents.foreach(n ⇒ write(n, environment))
+            write('<')
+            write('/')
+            write(name)
+            write('>')
+          }
+        } else {
+          directives.head match {
+            case d @ Namespace(prefix, uri) =>
+              write(
+                tag.copy(
+                  directives = directives.tail),
+                environment)
+            case d @ Let(transform, name, expression) =>
+              write(
+                tag.copy(
+                  directives = directives.tail),
+                environment(name, t(transform → environment.resolve(expression))))
+            case d @ Set(transform, name, expression) =>
+              environment.resolve(expression) match {
+                case Some((p: String, Some(v: AnyRef))) ⇒
+                  t(transform → Some(v)) match {
+                    case Some(value) =>
+                      attributes.find(_._1 == name).map(_._2.replace(p, value.toString)).foreach { replacedValue =>
+                        write(
+                          tag.copy(
+                            attributes = attributes.filterNot(_._1 == name) :+ ((name, replacedValue)),
+                            directives = directives.tail),
+                          environment)
+                      }
+                    case None =>
+                      write(
+                        tag.copy(
+                          attributes = attributes.filterNot(_._1 == name),
+                          directives = directives.tail),
+                        environment)
+                  }
+                case Some(v: AnyRef) ⇒
+                  t(transform → Some(v)) match {
+                    case Some(value) =>
+                      write(
+                        tag.copy(
+                          attributes = attributes.filterNot(_._1 == name) :+ ((name, value.toString)),
+                          directives = directives.tail),
+                        environment)
+                    case None =>
+                      write(
+                        tag.copy(
+                          attributes = attributes.filterNot(_._1 == name),
+                          directives = directives.tail),
+                        environment)
+                  }
+                case x ⇒
+                  val y = x
+                  write(
+                    tag.copy(
+                      attributes = attributes.filterNot(_._1 == name),
+                      directives = directives.tail),
+                    environment)
+              }
+            case d @ SetBody(transform, expression) ⇒
+              environment.resolve(expression) match {
+                case Some((p: String, Some(v: AnyRef))) ⇒
+                  t(transform → Some(v)) match {
+                    case Some(value) =>
+                      write(
+                        tag.copy(
+                          directives = directives.tail,
+                          contents = tag.contents.collect {
+                            case Text(data) ⇒ Text(data.replace(p, value.toString))
+                            case n ⇒ n
+                          }),
+                        environment)
+                    case None =>
+                      write(
+                        tag.copy(
+                          directives = directives.tail),
+                        environment)
+                  }
+                case Some(v: AnyRef) ⇒
+                  t(transform → Some(v)) match {
+                    case Some(value) =>
+                      write(
+                        tag.copy(
+                          directives = directives.tail,
+                          contents = Seq(Text(value.toString))),
+                        environment)
+                    case None =>
+                      write(
+                        tag.copy(
+                          directives = directives.tail),
+                        environment)
+                  }
+                case x ⇒
+                  val y = x
+                  write(
+                    tag.copy(
+                      directives = directives.tail),
+                    environment)
+              }
+            /*
+            apply(
+              tag.copy(
+                directives = directives.tail,
+                contents = Seq(Text())),
+              environment
+              )*/
+            case d @ Do(transform, name, expression) =>
+              environment.traverseValue(name, t(transform → environment.resolve(expression))).foreach { env =>
+                write(
+                  tag.copy(
+                    directives = directives.tail),
+                  env)
+              }
+            case d @ DoBody(transform, expression) ⇒
+              environment.traverseValue(t(transform → environment.resolve(expression))).foreach { env =>
+                write(
+                  tag.copy(
+                    directives = directives.tail),
+                  env)
+              }
+            case d @ Include(path) ⇒
+              val inclusion = factory.produce(path)
+              inclusion.tree.contents.foreach { node =>
+                write(node, environment)(factory, t, writer)
+              }
+            case _ =>
+          }
+        }
+    }
+  }
+  private def write(c: Char)(implicit writer: Writer) {
+    writer.write(c)
+    writer.flush()
+  }
+  private def write(s: String)(implicit writer: Writer) {
+    writer.write(s)
+    writer.flush()
+  }
+}
+
+trait StencilFactory {
+  def produce(path: String): Stencil
+}
+object MapStencilFactory extends StencilFactory {
+  import collection.mutable
+
+  val map = mutable.Map[String, Stencil]()
+
+  override def produce(path: String): Stencil = {
+    map.getOrElse(path, throw new IllegalArgumentException("No stencil found for path: " + path))
+  }
+
+  def produce(path: String, literal: String): Stencil = {
+    map.getOrElseUpdate(path, Stencil(literal))
+  }
+}
+
+class FileSystemStencilFactory(val root: File) extends StencilFactory {
+  import collection.mutable
+
+  val cache = mutable.Map[File, (Stencil, Long)]()
+
+  override def produce(path: String): Stencil = produce(new File(root, path))
+  private def produce(file: File): Stencil = {
+    require(file.exists(), "File not found: " + file.getPath)
+    fetch(file)
+  }
+
+  private def fetch(file: File): Stencil = {
+    var (stencil, timestamp) = cache.getOrElseUpdate(file, load(file) -> System.currentTimeMillis())
+    if (file.lastModified() > timestamp) {
+      stencil = load(file)
+      cache.put(file, stencil -> System.currentTimeMillis())
+    }
+    stencil
+  }
+
+  private def load(file: File): Stencil = {
+    require(file.exists(), "File not found: " + file.getPath)
+    val reader = new FileReader(file)
+    try Stencil(reader) finally reader.close()
   }
 }
 
