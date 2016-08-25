@@ -1,6 +1,7 @@
 package stencil
 
 import org.scalatest.FunSuite
+import Formatter.Default
 
 class StencilSpecification extends FunSuite {
   test("empty stencil should result in empty string") {
@@ -178,6 +179,7 @@ class StencilSpecification extends FunSuite {
       <!--<span x:set-name="persons" name="Nisse">-->
       """, "persons" → "Pelle")
   }
+  /*
   test("replacement expressions are resolved for set body bindings") {
     assert("""
       <span x:set="/Kalle/person/">Hello Kalle!</span>
@@ -202,16 +204,21 @@ class StencilSpecification extends FunSuite {
       """, "person" → "Pelle")
   }
   */
+  */
   test("include should include raw data") {
-    val personInfoStencil = MapStencilFactory.produce("person/info", """<person-info x:set-name="person.name" x:set-old="person.old"/>""")
+    val personInfoStencil = MapStencilFactory.produce(
+      "person/info", """<person-info x:set-name="person.name" x:set-old="person.old"/>""")
     assert("""
       <person x:do-person="persons"><name x:include="person/info"/></person>
            """, """
-      <person><person-info name="Lasse" old="true"/></person><person><person-info name="Pelle" old="false"/></person>
-           """, "persons" → List(Person("Lasse", "FOO", old = true), Person("Pelle", "BAR")))
+      <person><person-info name="Lasse" old="true"/></person><person><person-info name="Pelle"/></person>
+           """,
+      "persons" → List(Person("Lasse", "FOO", old = true), Person("Pelle", "BAR")))
   }
 
   private def assert(actual: String, expected: String, bindings: (String, AnyRef)*) {
-    assert(Stencil(actual).apply(bindings: _*) === expected)
+    val stencil = Stencil(actual)
+    val result = stencil.apply(bindings: _*)
+    assert(result === expected)
   }
 }

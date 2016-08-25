@@ -1,38 +1,42 @@
 package stencil
 
 import org.scalatest.{FreeSpec, FunSuite}
+
 import scala.xml.XML
 
 class EnvironmentSpecification extends FreeSpec {
   "An environment" - {
     "when empty" - {
-      "should resolves all expressions and all lookups to None" in {
-        assert(Environment.Empty.resolve("Kalle") === None)
-        assert(Environment.Empty.lookup("Kalle") === None)
+      "should return empty seq for all names" in {
+        assert(Environment().resolve("Kalle") === None)
+        assert(Environment().resolve("Nisse") === None)
       }
       "should resolve quoted literals to strings" in {
-        assert(Environment.Empty.resolve("'Kalle'") === Some("Kalle"))
+        assert(Environment().resolve("'Kalle'") === Some("Kalle"))
       }
       "should resolve conditional operator expressions to positive expression if non empty" in {
-        assert(Environment.Empty.resolve("'Kalle'?'Pelle':'Nisse'") === Some("Pelle"))
+        assert(Environment().resolve("'Kalle'?'Pelle':'Nisse'") === Some("Pelle"))
       }
     }
-    "when consisting of a map" - {
+    "when consisting of a binding" - {
       "should resolve simple expressions to their bound value" in {
         assert(Environment("name" → "Kalle").resolve("name") === Some("Kalle"))
-        assert(Environment("name" → "Kalle")("age" -> "30").resolve("name") === Some("Kalle"))
+        assert(Environment("name" → "Kalle").bind("age" -> "30").resolve("name") === Some("Kalle"))
       }
       "should resolve simple expressions to their bound value in the nearest enclosing environment" in {
         assert(Environment("name" → "Kalle").resolve("name") === Some("Kalle"))
-        assert(Environment("name" → "Kalle")("name" -> "Nisse").resolve("name") === Some("Nisse"))
+        assert(Environment("name" → "Kalle").bind("name" -> "Nisse").resolve("name") === Some("Nisse"))
       }
       "should resolve complex expressions to their bound value" in {
-        assert(Environment("name.first" → "Kalle").resolve("name.first") === Some("Kalle"))
-        assert(Environment("name.first" → "Kalle")("age" -> "30").resolve("name.first") === Some("Kalle"))
+        assert(Environment("name.first" → "Kalle").traverse("firstName", "name.first").map(_.resolve("firstName")) === Seq(Some("Kalle")))
+        assert(Environment("name.first" → "Kalle").bind("age" -> "30").traverse("firstName", "name.first").map(_.resolve("firstName")) === Seq(Some("Kalle")))
       }
-      "should resolve complex expressions to their bound value in the nearest enclosing environment" in {
-        assert(Environment("name.first" → "Kalle").resolve("name.first") === Some("Kalle"))
-        assert(Environment("name.first" → "Kalle")("name.first" -> "Nisse").resolve("name.first") === Some("Nisse"))
+      "should resolve complex expressions to their bound value in the nearest enclosing environment with a matching binding" in {
+        assert(Environment("name.first" → "Kalle").bind("name", "Nisse").resolve("name.first") === Some("Kalle"))
+        assert(Environment("name.first" → "Kalle").bind("name.first", "Nisse").resolve("name.first") === Some("Nisse"))
+      }
+      "should resolve traversed expressions to their originaly bound value" in {
+        assert(Environment("name.first" → "Kalle").bind("firstName" -> "Nisse").traverse("firstName", "name.first").map(_.resolve("firstName")) === Seq(Some("Kalle")))
       }
     }
     "when consisting of an instance" - {
@@ -51,12 +55,12 @@ class EnvironmentSpecification extends FreeSpec {
         val kalle = Person(Name("Kalle", "Blomkvist"))
         val nisse = Person(Name("Nisse", "Karlsson"))
         assert(Environment("person" → kalle).resolve("person.name.first") === Some("Kalle"))
-        assert(Environment("person" → kalle)("person" -> nisse).resolve("person.name.first") === Some("Nisse"))
+        assert(Environment("person" → kalle).bind("person" -> nisse).resolve("person.name.first") === Some("Nisse"))
       }
       "should resolve method expressions one level at a time" in {
         val kalle = Person(Name("Kalle", "Blomkvist"))
         val nisse = Person(Name("Nisse", "Karlsson"))
-        val env = Environment("person" → kalle)("person" -> nisse)("person.name.first" -> "Pelle")
+        val env = Environment("person" → kalle).bind("person" -> nisse).bind("person.name.first" -> "Pelle")
         assert(env.resolve("person.name.first") === Some("Pelle"))
         assert(env.resolve("person.name.last") === Some("Karlsson"))
       }
@@ -67,9 +71,9 @@ class EnvironmentSpecification extends FreeSpec {
       "should resolve optional values once if Some and nonce if None" in {
         val kalle = Person(Name("Kalle", "Blomkvist"), alias = Some("Detective"))
         val nisse = Person(Name("Nisse", "Karlsson"))
-        assert(Environment("person" → kalle)("person.alias").size === 1)
-        assert(Environment("person" → kalle)("alias", "person.alias").head.resolve("alias") === Some("Detective"))
-        assert(Environment("person" → nisse)("person.alias").size === 0)
+        assert(Environment("person" → kalle).traverse("alias", "person.alias").size === 1)
+        assert(Environment("person" → kalle).traverse("alias", "person.alias").map(_.resolve("alias")) === Seq(Some("Detective")))
+        assert(Environment("person" → nisse).traverse("alias", "person.alias").size === 0)
       }
       "should resolve map values transparently" in {
         val kalle = Person(name = Name("Kalle", "Blomkvist"), properties = Map("age" → "30"))
@@ -80,9 +84,13 @@ class EnvironmentSpecification extends FreeSpec {
         val nisse = Person(Name("Nisse", "Karlsson"), alias = Some("Slick"))
         val pelle = Person(Name("Pelle", "Persson"), alias = Some("Animal"))
         val kalle = Person(name = Name("Kalle", "Blomkvist"), friends = nisse :: pelle :: Nil)
-        val env = Environment("person" → kalle)
-        assert(env("person.friends").size === 2)
-        assert(env("friend", "person.friends").map(_.resolve("friend.alias")) === Seq(Some("Slick"), Some("Animal")))
+        val personEnv = Environment("person" → kalle)
+        val friendEnvs = personEnv.traverse("friend", "person.friends")
+        assert(friendEnvs.size == 2)
+        val aliases = friendEnvs.map(_.resolve("friend.alias"))
+        assert(aliases === Seq(Some("Slick"), Some("Animal")))
+        val aliases2 = personEnv.resolve("person.friends.alias")
+        assert(aliases2 === Some(Seq("Slick", "Animal")))
       }
       "should resolve conditional values to correct alternative" in {
         val kalle = Person(name = Name("Kalle", "Blomkvist"), properties = Map("age" → "30"))
@@ -110,33 +118,26 @@ class EnvironmentSpecification extends FreeSpec {
           |</person>""")
 
       "should resolve missing expressions to None" in {
-        assert(Environment(xml).resolve("person.alias") === None)
+        assert(Environment(xml).traverse("alias", "person.alias") === Seq.empty)
       }
       "should resolve method expressions to their bound value in the nearest enclosing environment" in {
         val env = Environment(xml)
-        assert(env.resolve("person.name.first") === Some(List("Kalle")))
-        val friends = env("person.friends")
+        val friends: Seq[Environment] = env.traverse("friend", "person.friends")
         val friendsHead = friends.head
-        val persons1: Seq[Environment] = friendsHead("friends.person")
-        assert(persons1.map(p => p.resolve("person.name.first")) === Seq(Some(List("Nisse")), Some(List("Pelle"))))
-        val persons2: Seq[Environment] = env("person.friends.person")
-        assert(persons2.map(_.resolve("person.name.first")) === Seq(Some(List("Nisse", "Pelle"))))
+        val persons1: Seq[Environment] = friendsHead.traverse("person", "friends.person")
+        assert(persons1.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))
+        val persons2: Seq[Environment] = env.traverse("person", "person.friends.person")
+        assert(persons2.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))
         //val persons3: Seq[Environment] = Environment(xml)("person.friends.*")
-        //assert(persons3.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))
+        //assert(persons3.flatMap(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle"))))
       }
       "should resolve method expressions one level at a time" in {
-        /*
-        val kalle = Person(Name("Kalle", "Blomkvist"))
-        val nisse = Person(Name("Nisse", "Karlsson"))
-        val env = Environment("person" → kalle)("person" -> nisse)("person.name.first" -> "Pelle")
-        assert(env.resolve("person.name.first") === Some("Pelle"))
-        assert(env.resolve("person.name.last") === Some("Karlsson"))
-
-        val traverse = env.traverse("person.friends.person")
-        assert(traverse.size === 2)
-        val traverseFriend = env.traverse("friend", "person.friends.person")
-        assert(traverseFriend.map(_.resolve("friend.alias")) === Seq(Some("Slick"), Some("Animal")))
-        */
+        val env = Environment(xml)
+        assert(env.resolve("person.name.first") === Some("Kalle"))
+        assert(env.resolve("person.name.last") === Some("Blomkvist"))
+        val persons = env.traverse("person", "person.friends.person")
+        assert(persons.size === 2)
+        assert(persons.map(_.resolve("person.name.first")) === Seq(Some("Nisse"), Some("Pelle")))
       }
     }
   }

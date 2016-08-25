@@ -3,15 +3,16 @@ package stencil
 import util.matching.Regex.{Match, MatchData}
 import java.io._
 
+import stencil.Environment.Expression
+
 import scala.xml.NodeSeq
 
-class Stencil private (private[stencil] val tree: Stencil.Tree)(implicit factory: StencilFactory, transformer: Stencil.Transformer) {
+class Stencil private (private[stencil] val tree: Stencil.Tree)(implicit factory: StencilFactory) {
   import Stencil._
-  def this(reader: Reader)(implicit factory: StencilFactory, transformer: Stencil.Transformer) = this(Stencil.parse(reader))
-  //def withTransformer(transformer: Transformer): Stencil = new Stencil(tree)(transformer.orElse(defaultTransformer))
-  def apply(bindings: (String, AnyRef)*): String = apply(Environment(bindings: _*))
-  def apply(nodes: NodeSeq): String = apply(Environment(nodes))
-  def apply(environment: Environment): String = {
+  def this(reader: Reader)(implicit factory: StencilFactory) = this(Stencil.parse(reader))
+  def apply(bindings: (String, AnyRef)*)(implicit formatter: Formatter): String = apply(Environment(bindings.toMap))
+  def apply(nodes: NodeSeq)(implicit formatter: Formatter): String = apply(Environment(nodes))
+  def apply(environment: Environment)(implicit formatter: Formatter): String = {
     implicit val writer = new StringWriter()
     tree.contents.foreach { n ⇒ write(n, environment) }
     writer.getBuffer.toString
@@ -23,16 +24,12 @@ class Stencil private (private[stencil] val tree: Stencil.Tree)(implicit factory
         case (name, value) ⇒ " " + name + "=\"" + value + "\""
       }.mkString + directives.map {
         case Namespace(prefix, uri) => " xmlns:x" + prefix + "=\"" + uri + "\""
-        case Let(null, name, expression) ⇒ " x:let-" + name + "=\"" + expression + "\""
-        case Set(null, name, expression) ⇒ " x:set-" + name + "=\"" + expression + "\""
-        case Do(null, name, expression) ⇒ " x:do-" + name + "=\"" + expression + "\""
-        case Let(transform, name, expression) ⇒ " x:let--" + transform + "-" + name + "=\"" + expression + "\""
-        case Set(transform, name, expression) ⇒ " x:set--" + transform + "-" + name + "=\"" + expression + "\""
-        case Do(transform, name, expression) ⇒ " x:do--" + transform + "-" + name + "=\"" + expression + "\""
-        case SetBody(null, expression) ⇒ " x:set" + "=\"" + expression + "\""
-        case DoBody(null, expression) ⇒ " x:do" + "=\"" + expression + "\""
-        case SetBody(transform, expression) ⇒ " x:set--" + transform + "=\"" + expression + "\""
-        case DoBody(transform, expression) ⇒ " x:do--" + transform + "=\"" + expression + "\""
+        case Let(name, expression) ⇒ " x:let-" + name + "=\"" + expression + "\""
+        case Set(name, expression) ⇒ " x:set-" + name + "=\"" + expression + "\""
+        case Do(name, expression) ⇒ " x:do-" + name + "=\"" + expression + "\""
+        case SetBody(expression) ⇒ " x:set" + "=\"" + expression + "\""
+        case DoBody(expression) ⇒ " x:do" + "=\"" + expression + "\""
+        case Include(path) ⇒ " x:include" + "=\"" + path + "\""
       }.mkString + (if (contents.isEmpty) "/>" else ">" + contents.map(format).mkString + "</" + name + ">")
   }
   override def toString = tree.contents.map(format).mkString
@@ -49,24 +46,28 @@ object Stencil {
   }
   case class Tag(name: String, attributes: Seq[(String, String)], directives: Seq[Directive], contents: Seq[Node] = Seq.empty) extends Node with Container
 
-  type =>?[-A, +B] = PartialFunction[A, B]
+  /*
   type Transformer = (String, Option[AnyRef]) =>? Option[AnyRef]
-  val defaultTransformer: Transformer = { case (_, value) ⇒ value }
+  val defaultTransformer: Transformer = {
+    case (_, Some(ns: NodeSeq)) ⇒ Option(ns.text)
+    case (_, value) ⇒ value
+  }
+  */
 
   sealed trait Directive
   case class Namespace(prefix: String, uri: String) extends Directive
-  case class Let(transform: String, name: String, expression: String) extends Directive
-  case class Set(transform: String, name: String, expression: String) extends Directive
-  case class Do(transform: String, name: String, expression: String) extends Directive
-  case class SetBody(transform: String, expression: String) extends Directive
-  case class DoBody(transform: String, expression: String) extends Directive
+  case class Let(name: String, expression: String) extends Directive
+  case class Set(name: String, expression: String) extends Directive
+  case class Do(name: String, expression: String) extends Directive
+  case class SetBody(expression: String) extends Directive
+  case class DoBody(expression: String) extends Directive
   case class Include(path: String) extends Directive
 
   def apply(literal: String): Stencil = fromString(literal)
   def apply(reader: Reader): Stencil = fromReader(reader)
 
-  def fromString(literal: String)(implicit factory: StencilFactory = MapStencilFactory, transformer: Stencil.Transformer = defaultTransformer): Stencil = apply(new StringReader(literal))
-  def fromReader(reader: Reader)(implicit factory: StencilFactory = MapStencilFactory, transformer: Stencil.Transformer = defaultTransformer): Stencil = new Stencil(reader)
+  def fromString(literal: String)(implicit factory: StencilFactory = MapStencilFactory): Stencil = apply(new StringReader(literal))
+  def fromReader(reader: Reader)(implicit factory: StencilFactory = MapStencilFactory): Stencil = new Stencil(reader)
 
   val StartOrCloseTag = """<\s*(/)?([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?>""".r
   val DirectionTag = """<(?:\s*([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*(?:\s+(?:x:[\w_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))(?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?)>|(!--.*?--)>""".r
@@ -123,6 +124,7 @@ object Stencil {
     for (m ← matches) {
       if (m.group(1) == "x") {
         directives ::= (m.group(2) match {
+          /*
           case name if name.startsWith("let--") ⇒
             val suffix = name.substring("let--".length)
             val index = suffix.indexOf('-')
@@ -138,14 +140,15 @@ object Stencil {
             val index = suffix.indexOf('-')
             if (index > -1) Do(suffix.substring(0, index), suffix.substring(index + 1), m.group(3))
             else DoBody(suffix, m.group(3))
+            */
           case name if name.startsWith("let-") ⇒
-            Let(null, name.substring("let-".length), m.group(3))
+            Let(name.substring("let-".length), m.group(3))
           case name if name.startsWith("set-") ⇒
-            Set(null, name.substring("set-".length), m.group(3))
+            Set(name.substring("set-".length), m.group(3))
           case name if name.startsWith("do-") ⇒
-            Do(null, name.substring("do-".length), m.group(3))
-          case name if name == "set" ⇒ SetBody(null, m.group(3))
-          case name if name == "do" ⇒ DoBody(null, m.group(3))
+            Do(name.substring("do-".length), m.group(3))
+          case name if name == "set" ⇒ SetBody(m.group(3))
+          case name if name == "do" ⇒ DoBody(m.group(3))
           case name if name == "include" => Include(m.group(3))
           case _ ⇒ throw new IllegalStateException("Unknown directive encountered [" + m.group(0) + "]")
         })
@@ -178,8 +181,15 @@ object Stencil {
     if (last != null) (start - (last.end - last.start), start)
     else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
   }
-  private def write(node: Node, environment: Environment)(implicit factory: StencilFactory, transformer: Stencil.Transformer, writer: Writer) {
-    def t = transformer.orElse(defaultTransformer)
+  private def write(node: Node, env: Environment)(implicit factory: StencilFactory, formatter: Formatter, writer: Writer) {
+    /*
+    def formatValue: Any =>? String = {
+      case ns: NodeSeq => ns.text
+      case Some(x) => formatValue.apply(x)
+      case t: Traversable[_] => t.map(formatValue).mkString(", ")
+      case x => String.valueOf(x)
+    }
+    */
     node match {
       case Text(data) ⇒
         write(data)
@@ -193,7 +203,7 @@ object Stencil {
               write(name)
               write('=')
               write('"')
-              write(value)
+              write(formatter(value))
               write('"')
           }
           if (contents.isEmpty) {
@@ -201,7 +211,7 @@ object Stencil {
             write('>')
           } else {
             write('>')
-            contents.foreach(n ⇒ write(n, environment))
+            contents.foreach(n ⇒ write(n, env))
             write('<')
             write('/')
             write(name)
@@ -210,122 +220,57 @@ object Stencil {
         } else {
           directives.head match {
             case d @ Namespace(prefix, uri) =>
-              write(
-                tag.copy(
-                  directives = directives.tail),
-                environment)
-            case d @ Let(transform, name, expression) =>
-              write(
-                tag.copy(
-                  directives = directives.tail),
-                environment(name, t(transform → environment.resolve(expression))))
-            case d @ Set(transform, name, expression) =>
-              environment.resolve(expression) match {
-                case Some((p: String, Some(v: AnyRef))) ⇒
-                  t(transform → Some(v)) match {
-                    case Some(value) =>
-                      attributes.find(_._1 == name).map(_._2.replace(p, value.toString)).foreach { replacedValue =>
-                        write(
-                          tag.copy(
-                            attributes = attributes.filterNot(_._1 == name) :+ ((name, replacedValue)),
-                            directives = directives.tail),
-                          environment)
-                      }
-                    case None =>
-                      write(
-                        tag.copy(
-                          attributes = attributes.filterNot(_._1 == name),
-                          directives = directives.tail),
-                        environment)
-                  }
-                case Some(v: AnyRef) ⇒
-                  t(transform → Some(v)) match {
-                    case Some(value) =>
-                      write(
-                        tag.copy(
-                          attributes = attributes.filterNot(_._1 == name) :+ ((name, value.toString)),
-                          directives = directives.tail),
-                        environment)
-                    case None =>
-                      write(
-                        tag.copy(
-                          attributes = attributes.filterNot(_._1 == name),
-                          directives = directives.tail),
-                        environment)
-                  }
-                case x ⇒
-                  val y = x
-                  write(
-                    tag.copy(
-                      attributes = attributes.filterNot(_._1 == name),
-                      directives = directives.tail),
-                    environment)
+              write(tag.copy(directives = directives.tail), env)
+            case d @ Let(name, expression) =>
+              env.traverse(name, Expression(expression)).foreach { env =>
+                write(tag.copy(
+                  directives = directives.tail), env)
               }
-            case d @ SetBody(transform, expression) ⇒
-              environment.resolve(expression) match {
-                case Some((p: String, Some(v: AnyRef))) ⇒
-                  t(transform → Some(v)) match {
-                    case Some(value) =>
-                      write(
-                        tag.copy(
-                          directives = directives.tail,
-                          contents = tag.contents.collect {
-                            case Text(data) ⇒ Text(data.replace(p, value.toString))
-                            case n ⇒ n
-                          }),
-                        environment)
-                    case None =>
-                      write(
-                        tag.copy(
-                          directives = directives.tail),
-                        environment)
+            case d @ Set(name, expression) =>
+              env.resolve(expression) match {
+                case Empty() =>
+                  write(tag.copy(
+                    attributes = attributes.filterNot(_._1 == name),
+                    directives = directives.tail), env)
+                case Some(t: Traversable[_]) ⇒
+                  t.foreach { value: Any =>
+                    write(tag.copy(
+                      attributes = attributes.filterNot(_._1 == name) :+ ((name, formatter(value))),
+                      directives = directives.tail), env)
                   }
-                case Some(v: AnyRef) ⇒
-                  t(transform → Some(v)) match {
-                    case Some(value) =>
-                      write(
-                        tag.copy(
-                          directives = directives.tail,
-                          contents = Seq(Text(value.toString))),
-                        environment)
-                    case None =>
-                      write(
-                        tag.copy(
-                          directives = directives.tail),
-                        environment)
+                case Some(value) ⇒
+                  write(tag.copy(
+                    attributes = attributes.filterNot(_._1 == name) :+ ((name, formatter(value))),
+                    directives = directives.tail), env)
+              }
+            case d @ SetBody(expression) ⇒
+              env.resolve(expression) match {
+                case Empty() =>
+                  write(tag.copy(
+                    directives = directives.tail), env)
+                case Some(t: Traversable[_]) ⇒
+                  t.foreach { value: Any =>
+                    write(tag.copy(
+                      directives = directives.tail,
+                      contents = Seq(Text(formatter(value)))), env)
                   }
-                case x ⇒
-                  val y = x
-                  write(
-                    tag.copy(
-                      directives = directives.tail),
-                    environment)
+                case Some(value) =>
+                  write(tag.copy(
+                    directives = directives.tail,
+                    contents = Seq(Text(formatter(value)))), env)
               }
-            /*
-            apply(
-              tag.copy(
-                directives = directives.tail,
-                contents = Seq(Text())),
-              environment
-              )*/
-            case d @ Do(transform, name, expression) =>
-              environment.traverseValue(name, t(transform → environment.resolve(expression))).foreach { env =>
-                write(
-                  tag.copy(
-                    directives = directives.tail),
-                  env)
+            case d @ Do(name, expression) =>
+              env.traverse(name, Expression(expression)).foreach { e =>
+                write(tag.copy(directives = directives.tail), e)
               }
-            case d @ DoBody(transform, expression) ⇒
-              environment.traverseValue(t(transform → environment.resolve(expression))).foreach { env =>
-                write(
-                  tag.copy(
-                    directives = directives.tail),
-                  env)
+            case d @ DoBody(expression) ⇒
+              env.traverse(name, Expression(expression)).foreach { e =>
+                write(tag.copy(directives = directives.tail), e)
               }
             case d @ Include(path) ⇒
               val inclusion = factory.produce(path)
               inclusion.tree.contents.foreach { node =>
-                write(node, environment)(factory, t, writer)
+                write(node, env)(factory, formatter, writer)
               }
             case _ =>
           }
@@ -382,7 +327,7 @@ case class FileSystemStencilFactory(root: File) extends StencilFactory {
   private def load(file: File): Stencil = {
     require(file.exists(), "File not found: " + file.getPath)
     val reader = new FileReader(file)
-    try Stencil(reader) finally reader.close()
+    try Stencil.fromReader(reader)(this) finally reader.close()
   }
 }
 
@@ -393,6 +338,8 @@ object Main {
   case class Product(name: String, price: Double)
 
   def main(args: Array[String]) {
+    import Formatter.Default
+
     val data = """<html xmlns:x="http://bitbonanza.org/stencil">
                  |  <body x:let-customer="order.customer">
                  |    <span x:set="customer.name" title="title" x:set-title="order.customer.name">ACME</span> <span x:set="order.date">2012-01-01</span>
