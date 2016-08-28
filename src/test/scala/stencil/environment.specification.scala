@@ -5,6 +5,11 @@ import org.scalatest.{FreeSpec, FunSuite}
 import scala.xml.XML
 
 class EnvironmentSpecification extends FreeSpec {
+  case class Name(first: String, last: String)
+  case class Person(name: Name, alias: Option[String] = None, friends: List[Person] = Nil, properties: Map[String, String] = Map.empty)
+
+  import Environment.Accessor.default
+
   "An environment" - {
     "when empty" - {
       "should return empty seq for all names" in {
@@ -13,6 +18,11 @@ class EnvironmentSpecification extends FreeSpec {
       }
       "should resolve quoted literals to strings" in {
         assert(Environment().resolve("'Kalle'") === Some("Kalle"))
+      }
+      "should resolve '@' to correct accessor" in {
+        val kalle = Person(Name("Kalle", "Blomkvist"))
+        assert(Environment().bind("person", kalle).resolve("person@class") === Some(kalle.getClass.getName))
+        assert(Environment().bind("person", kalle).resolve("person@kind") === Some(kalle.getClass.getSimpleName.toLowerCase()))
       }
       "should resolve conditional operator expressions to positive expression if non empty" in {
         assert(Environment().resolve("'Kalle'?'Pelle':'Nisse'") === Some("Pelle"))
@@ -40,9 +50,6 @@ class EnvironmentSpecification extends FreeSpec {
       }
     }
     "when consisting of an instance" - {
-      case class Name(first: String, last: String)
-      case class Person(name: Name, alias: Option[String] = None, friends: List[Person] = Nil, properties: Map[String, String] = Map.empty)
-
       "should resolve missing method expressions to None" in {
         val kalle = Person(Name("Kalle", "Blomkvist"))
         assert(Environment("person" → kalle).resolve("person.alias") === None)

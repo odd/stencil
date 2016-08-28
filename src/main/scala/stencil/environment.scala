@@ -3,9 +3,10 @@ package stencil
 import scala.collection.immutable.ListMap
 import scala.language.postfixOps
 import scala.util.Try
-import scala.xml.{Elem, Node, NodeSeq}
+import scala.util.control.NonFatal
+import scala.xml.{Elem, NodeSeq}
 
-case class Environment(parent: Environment, instance: Any) {
+case class Environment(parent: Environment, instance: Any)(implicit accessor: Environment.Accessor) {
   import Environment._
   def bind(name: String, value: Any): Environment = Environment(this, Map(name -> value))
   def bind(bindings: (String, Any)*): Environment = Environment(this, bindings.toMap)
@@ -13,10 +14,10 @@ case class Environment(parent: Environment, instance: Any) {
   private def bind(value: Any): Environment = Environment(this, value)
   def traverse(name: String, exp: String): Seq[Environment] = traverse(name, Expression(exp))
   def traverse(name: String, exp: Expression): Seq[Environment] = exp match {
-    case Literal(_, Empty()) => Seq()
-    case Literal(_, value) => Seq(bind(name, value))
-    case Path(_, Empty()) => Seq()
-    case p @ Path(_, value) =>
+    case Literal(Empty()) => Seq()
+    case Literal(value) => Seq(bind(name, value))
+    case Path(_, Empty(), _) => Seq()
+    case p @ Path(_, _, _) =>
       val resolved: Option[Any] = resolve(p)
       val mapped: Option[Seq[Environment]] = resolved.map {
           case t: Traversable[_] =>
@@ -56,27 +57,35 @@ case class Environment(parent: Environment, instance: Any) {
     val mapped: Option[Any] = handled.flatMap(_._2)
     mapped
   }
+  private[this] def access(v: Any, acc: String): Option[Any] = {
+    val vo = v.??
+    vo.map { v =>
+      if (accessor.f.isDefinedAt((v, acc))) accessor.f.apply((v, acc)).??
+      else v
+    }
+  }
   private[this] type Handler = (Expression, Any) =>? Option[Any]
   private[this] val handlers: Map[String, Handler] = ListMap("empty expression" -> {
-    case (Literal(_, Empty()), _) => None
-    case (Literal(_, value), _) => Some(value)
+    case (Literal(Empty()), _) => None
+    case (Literal(value), _) => Some(value)
     case (Conditional(_, condition, positive, negative), _) =>
       val resolvedCondition = resolve(condition)
       if (resolvedCondition.isEmpty) resolve(negative)
       else if (positive.length > 0) resolve(positive)
       else resolvedCondition
-    case (Path(_, Empty()), _) => None
+    case (Path(_, Empty(), _), _) => None
   }, "empty instance" -> {
     case (_, Empty()) => None
   }, "mapped" -> {
-    case (p@Path(_, value), map: Map[_, _]) if map.forall(t => t._1.isInstanceOf[String]) && map.asInstanceOf[Map[String, Any]].contains(value) =>
-      map.asInstanceOf[Map[String, Any]].get(value)
+    case (p @ Path(_, value, acc), map: Map[_, _]) if map.forall(t => t._1.isInstanceOf[String]) && map.asInstanceOf[Map[String, Any]].contains(value) =>
+      val result = map.asInstanceOf[Map[String, Any]].get(value)
+      access(result, acc)
   }, "typed" -> {
-    case (p @ Path(_, segment), (name, value)) if segment == name =>
-      value??
-    case (p @ Path(_, name), elem: Elem) if p.isSingleton && elem.label == name =>
-      elem??
-    case (p @ Path(_, name), nodes: NodeSeq) if p.isSingleton =>
+    case (p @ Path(_, segment, acc), (name, value)) if segment == name =>
+      access(value, acc)
+    case (p @ Path(_, name, acc), elem: Elem) if p.isSingleton && elem.label == name =>
+      access(elem, acc)
+    case (p @ Path(_, name, acc), nodes: NodeSeq) if p.isSingleton =>
       def select(ns: NodeSeq, child: String): Seq[Any] = {
         def extract(ns: NodeSeq): List[Any] = {
           val elems = (ns \ child).toList
@@ -99,14 +108,15 @@ case class Environment(parent: Environment, instance: Any) {
       }
       val selected: Seq[Any] = select(nodes, name)
       if (selected.isEmpty) None
-      else if (selected.size == 1) selected.head??
-      else selected??
-    case (p @ Path(_, index), t: Traversable[_]) if Try(index.toInt).isSuccess =>
+      else if (selected.size == 1) access(selected.head, acc)
+      else access(selected, acc)
+    case (p @ Path(_, index, acc), t: Traversable[_]) if Try(index.toInt).isSuccess =>
       val seq = t.toSeq
       val v = p.toString.toInt
       val i = math.max(0, math.min(seq.size - 1, if (v < 0) seq.size + v else v))
-      seq(i)??
-    case (p@Path(_, _), t: Traversable[_]) if !t.isInstanceOf[NodeSeq] =>
+      val result = seq(i).??
+      access(result, acc)
+    case (p@Path(_, _, acc), t: Traversable[_]) if !t.isInstanceOf[NodeSeq] =>
       val options = t.map { o =>
         Environment(parent, o).resolveLocal(p)
       }
@@ -114,17 +124,17 @@ case class Environment(parent: Environment, instance: Any) {
         case Some(v) => v
       }
       if (values.isEmpty) None
-      else if (values.size == 1) values.head??
-      else values??
-    case (p@Path(_, name), o: AnyRef) if p.isSingleton =>
+      else if (values.size == 1) access(values.head, acc)
+      else access(values, acc)
+    case (p@Path(_, name, acc), o: AnyRef) if p.isSingleton =>
       try {
         val value: Option[Any] = o.getClass.getMethod(name).invoke(o).??
-        value
+        access(value, acc)
       } catch {
         case e: NoSuchMethodException ⇒ None
       }
   }, "complex" -> {
-    case (p @ Path(_, _), _) if p.isComplex =>
+    case (p @ Path(_, _, acc), _) if p.isComplex =>
       val canditates: Seq[(Expression, Expression)] = p.candidates
       val mapped: Seq[Option[Any]] = canditates.map {
         case (candidate, rest) =>
@@ -135,11 +145,21 @@ case class Environment(parent: Environment, instance: Any) {
           }
           local3
       }
-      mapped.headOption.getOrElse(None)
+      val result = mapped.headOption.getOrElse(None)
+      access(result, acc)
   })
 }
 object Environment {
-  def apply(value: Any): Environment = Environment(null, value)
+  case class Accessor(f: (Any, String) =>? Any) extends AnyVal {
+    def apply(o: (Any, String)) = f(o)
+  }
+  object Accessor {
+    implicit val default: Accessor = Accessor({
+      case (o, "class") => o.getClass.getName
+      case (o, "kind") => o.getClass.getSimpleName.toLowerCase()
+    })
+  }
+  def apply(value: Any)(implicit accessor: Accessor): Environment = Environment(null, value)
 
   sealed trait Expression {
     def literal: String
@@ -147,18 +167,24 @@ object Environment {
   }
   object Expression {
     //val Pattern = """(^[a-zA-Z0-9_:-]*(?:\.[a-zA-Z0-9_:-]+)*$)|(^'[^']*'$)|(?:^/([^/]+)/([^/]*)/$)|(?:^(.+?)\?(.*?):(.+?)$)""".r
-    val Pattern = """(^[a-zA-Z0-9_:-]*(?:[\[\.][a-zA-Z0-9_:-]+\]?)*$)|(?:^'([^']*)'$)|(?:^(.+?)\?(.*?):(.+?)$)""".r
+    val Pattern = """(?:(^[a-zA-Z0-9_:-]*(?:[\[\.][a-zA-Z0-9_:-]+\]?)*)(?:@([a-zA-Z0-9_:-]+))?$)|(?:^'([^']*)'$)|(?:^(.+?)\?(.*?):(.+?)$)""".r
     def apply(exp: String): Expression = {
-      val Pattern(path, literal, condition, positive, negative) = exp
-      if (path != null) Path(exp, path.replace('[', '.').replace(']', '.'))
-      else if (literal != null) Literal(exp, literal)
-      //else if (pattern != null) Replace(pattern, replacement)
-      else if (condition != null) Conditional(exp, condition, positive, negative)
-      else throw new IllegalArgumentException("Malformed expression specified: " + exp)
+      try {
+        val Pattern(path, acc, literal, condition, positive, negative) = exp
+        if (path != null) Path(exp, path.replace('[', '.').replace(']', '.'), acc)
+        else if (literal != null) Literal(literal)
+        //else if (pattern != null) Replace(pattern, replacement)
+        else if (condition != null) Conditional(exp, condition, positive, negative)
+        else throw new IllegalArgumentException("Malformed expression specified: " + exp)
+      } catch {
+        case NonFatal(_) => Literal(exp)
+      }
     }
   }
-  case class Literal(literal: String, str: String) extends Expression
-  case class Path(literal: String, value: String) extends Expression {
+  case class Literal(str: String) extends Expression {
+    override def literal: String = str
+  }
+  case class Path(literal: String, value: String, accessor: String) extends Expression {
     val segments: List[String] = value.split('.').toList
     val isEmpty: Boolean = segments.isEmpty
     val isSingleton: Boolean = segments.size == 1

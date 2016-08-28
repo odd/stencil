@@ -2,17 +2,19 @@ import scala.language.postfixOps
 import scala.xml.NodeSeq
 package object stencil {
   type =>?[-A, +B] = PartialFunction[A, B]
-  type Formatter = Any =>? String
+  case class Formatter(f: Any =>? String) extends AnyVal {
+    def apply(o: Any) = f(o)
+  }
   object Formatter {
-    implicit val Default: Formatter = {
+    implicit val default: Formatter = Formatter({
       case s: String => s
       case null => ""
       case None => ""
-      case Some(v) => Default(v)
+      case Some(v) => default(v)
       case ns: NodeSeq => ns.toString()
-      case seq: Seq[_] => seq.map(Default).mkString(", ")
+      case seq: Seq[_] => seq.map(default.apply).mkString(", ")
       case x => x.toString
-    }
+    })
   }
   implicit class RichTypedAny[T](val t: T) extends AnyVal {
     def `?`: Option[T] = t match {

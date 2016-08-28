@@ -1,7 +1,7 @@
 package stencil
 
 import org.scalatest.FunSuite
-import Formatter.Default
+import Formatter.default
 
 class StencilSpecification extends FunSuite {
   test("empty stencil should result in empty string") {
@@ -129,13 +129,14 @@ class StencilSpecification extends FunSuite {
       </span>""", """
       """, "persons" → Nil)
   }
-  case class Person(name: String, company: String, old: Boolean = false)
+  case class Company(name: String)
+  case class Person(name: String, company: Company, old: Boolean = false)
   test("do directives should repeat their target element the correct number of times") {
     assert("""
       <prefix/>
       <person x:do-person="persons">
         <name x:set="person.name">Kalle</name>
-        <company x:set="person.company">ACME</company>
+        <company x:set="person.company.name">ACME</company>
       </person>
       <suffix/>""", """
       <prefix/>
@@ -149,14 +150,14 @@ class StencilSpecification extends FunSuite {
         <name>Nisse</name>
         <company>FOOBAR</company>
       </person>
-      <suffix/>""", "persons" → List(Person("Lasse", "FOO"), Person("Pelle", "BAR"), Person("Nisse", "FOOBAR")))
+      <suffix/>""", "persons" → List(Person("Lasse", Company("FOO")), Person("Pelle", Company("BAR")), Person("Nisse", Company("FOOBAR"))))
   }
   test("conditional operator should pick positive case for non empty conditions") {
     assert("""
       <person x:do-person="persons" x:set-name="person.name" x:set-active="person.old?'false':'true'" name="Kalle" active="unknown"/>
       """, """
       <person name="Lasse" active="false"/><person name="Pelle" active="true"/>
-      """, "persons" → List(Person("Lasse", "FOO", old = true), Person("Pelle", "BAR")))
+      """, "persons" → List(Person("Lasse", Company("FOO"), old = true), Person("Pelle", Company("BAR"))))
   }
   test("missing end tags should throw exception") {
     intercept[IllegalStateException](Stencil("""
@@ -205,15 +206,27 @@ class StencilSpecification extends FunSuite {
   }
   */
   */
-  test("include should include raw data") {
+  test("include should include specified stencil") {
     val personInfoStencil = MapStencilFactory.produce(
-      "person/info", """<person-info x:set-name="person.name" x:set-old="person.old"/>""")
+      "person/info", """<person-info x:set-name="#{person.name}" x:set-old="#{person.old}"/>""")
     assert("""
       <person x:do-person="persons"><name x:include="person/info"/></person>
            """, """
       <person><person-info name="Lasse" old="true"/></person><person><person-info name="Pelle"/></person>
            """,
-      "persons" → List(Person("Lasse", "FOO", old = true), Person("Pelle", "BAR")))
+      "persons" → List(Person("Lasse", Company("FOO"), old = true), Person("Pelle", Company("BAR"))))
+  }
+  test("include should include stencil according to accessor") {
+    MapStencilFactory.produce(
+      "person/info", """<person-info x:set-name="#{person.name}" x:set-old="#{person.old}"/>""")
+    MapStencilFactory.produce(
+      "company/info", """<company-info x:set-default="#{company.name}"/>""")
+    assert("""
+      <person x:do-person="persons"><span x:include="#{person@kind}/info">Kalle</span><span x:do-company="person.company" x:include="#{company@kind}/info">Nisse</span></person>
+           """, """
+      <person><person-info name="Lasse" old="true"/><company-info default="FOO"/></person><person><person-info name="Pelle"/><company-info default="BAR"/></person>
+           """,
+      "persons" → List(Person("Lasse", Company("FOO"), old = true), Person("Pelle", Company("BAR"))))
   }
 
   private def assert(actual: String, expected: String, bindings: (String, AnyRef)*) {

@@ -14,7 +14,7 @@ class Stencil private (private[stencil] val tree: Stencil.Tree)(implicit factory
   def apply(nodes: NodeSeq)(implicit formatter: Formatter): String = apply(Environment(nodes))
   def apply(environment: Environment)(implicit formatter: Formatter): String = {
     implicit val writer = new StringWriter()
-    tree.contents.foreach { n ⇒ write(n, environment) }
+    tree.contents.foreach { n ⇒ writeNodeWith(n, environment) }
     writer.getBuffer.toString
   }
   def format(node: Node): String = node match {
@@ -44,7 +44,7 @@ object Stencil {
   case class Text(data: String) extends Node {
     override def toString = this.productPrefix
   }
-  case class Tag(name: String, attributes: Seq[(String, String)], directives: Seq[Directive], contents: Seq[Node] = Seq.empty) extends Node with Container
+  case class Tag(name: String, attributes: Seq[(String, String)], directives: Seq[Directive[_]], contents: Seq[Node] = Seq.empty) extends Node with Container
 
   /*
   type Transformer = (String, Option[AnyRef]) =>? Option[AnyRef]
@@ -54,14 +54,56 @@ object Stencil {
   }
   */
 
-  sealed trait Directive
-  case class Namespace(prefix: String, uri: String) extends Directive
-  case class Let(name: String, expression: String) extends Directive
-  case class Set(name: String, expression: String) extends Directive
-  case class Do(name: String, expression: String) extends Directive
-  case class SetBody(expression: String) extends Directive
-  case class DoBody(expression: String) extends Directive
-  case class Include(path: String) extends Directive
+  case class Expression(data: Seq[Expression.Data]) {
+    import Expression._
+    def format(implicit formatter: Formatter, env: Environment): String = data.foldLeft("") {
+      case (s, Literal(value)) =>
+        s + value
+      case (s, Path(literal)) =>
+        s + (env.resolve(literal) match {
+          case Empty() => ""
+          case Some(t: Traversable[_]) ⇒
+            t.foldLeft("") {
+              case (s, v) => s + formatter(v)
+            }
+          case Some(v) ⇒
+            formatter(v)
+        })
+    }
+  }
+  object Expression {
+    sealed trait Data
+    case class Literal(value: String) extends Data
+    case class Path(literal: String) extends Data
+
+    val Pattern = """(?:(?:#(\w+))|(?:#\{([^}]+)\}))""".r
+    def parse(literal: String): Expression = {
+      var data: List[Data] = Nil
+      var rest = literal
+      var mo: Option[Match] = Pattern.findFirstMatchIn(rest)
+      while (mo.isDefined) {
+        mo.foreach { m =>
+          val n = if (m.group(1) != null) 1 else 2
+          data = Path(m.group(n)) :: Literal(m.before.toString) :: data
+          rest = rest.substring(m.end)
+          mo = Pattern.findFirstMatchIn(rest)
+        }
+      }
+      if (data.isEmpty) Expression(List(Path(rest)))
+      else Expression((Literal(rest) :: data).reverse)
+    }
+  }
+  sealed trait Directive[T] {
+    def value: T
+    def format(implicit formatter: Formatter, env: Environment): String = value.toString
+  }
+  case class Namespace(prefix: String, value: String) extends Directive[String]
+  case class Let(name: String, value: String) extends Directive[String]
+  case class Do(name: String, value: String) extends Directive[String]
+  case class DoBody(value: String) extends Directive[String]
+  case class Set(name: String, value: Expression) extends Directive[Expression]
+  case class SetBody(value: Expression) extends Directive[Expression]
+  case class Include(value: Expression) extends Directive[Expression]
 
   def apply(literal: String): Stencil = fromString(literal)
   def apply(reader: Reader): Stencil = fromReader(reader)
@@ -117,9 +159,9 @@ object Stencil {
     } while (count == size)
     builder
   }
-  private def parseAttributes(data: String): (Seq[(String, String)], Seq[Directive]) = {
+  private def parseAttributes(data: String): (Seq[(String, String)], Seq[Directive[_]]) = {
     var attributes: List[(String, String)] = Nil
-    var directives: List[Directive] = Nil
+    var directives: List[Directive[_]] = Nil
     val matches: List[Match] = Attribute.findAllIn(data).matchData.toList
     for (m ← matches) {
       if (m.group(1) == "x") {
@@ -141,15 +183,12 @@ object Stencil {
             if (index > -1) Do(suffix.substring(0, index), suffix.substring(index + 1), m.group(3))
             else DoBody(suffix, m.group(3))
             */
-          case name if name.startsWith("let-") ⇒
-            Let(name.substring("let-".length), m.group(3))
-          case name if name.startsWith("set-") ⇒
-            Set(name.substring("set-".length), m.group(3))
-          case name if name.startsWith("do-") ⇒
-            Do(name.substring("do-".length), m.group(3))
-          case name if name == "set" ⇒ SetBody(m.group(3))
+          case name if name.startsWith("let-") ⇒ Let(name.substring("let-".length), m.group(3))
+          case name if name.startsWith("do-") ⇒ Do(name.substring("do-".length), m.group(3))
           case name if name == "do" ⇒ DoBody(m.group(3))
-          case name if name == "include" => Include(m.group(3))
+          case name if name.startsWith("set-") ⇒ Set(name.substring("set-".length), Expression.parse(m.group(3)))
+          case name if name == "set" ⇒ SetBody(Expression.parse(m.group(3)))
+          case name if name == "include" => Include(Expression.parse(m.group(3)))
           case _ ⇒ throw new IllegalStateException("Unknown directive encountered [" + m.group(0) + "]")
         })
       } else {
@@ -160,19 +199,20 @@ object Stencil {
   }
   private def findBodyEndIndices(data: CharSequence, offset: Int, tagName: String): (Int, Int) = {
     var start = offset
-    var stack = List((tagName, null: MatchData))
+    var stack = List((tagName, start))
     var last: Match = null
     while (stack.nonEmpty && start < data.length) {
-      StartOrCloseTag.findFirstMatchIn(data.subSequence(start, data.length)) match {
+      val subSequence: CharSequence = data.subSequence(start, data.length)
+      StartOrCloseTag.findFirstMatchIn(subSequence) match {
         case None ⇒ throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
         case Some(m) ⇒
           if (m.group(1) == "/") {
             if (stack.head._1 != m.group(2)) {
-              throw new IllegalStateException("No matching end tag found for start tag [" + stack.head._2 + " @ offset: " + stack.head._2.start + "].")
+              throw new IllegalStateException("No matching end tag found for start tag [" + stack.head._1 + " @ offset: " + stack.head._2 + "].")
             }
             stack = stack.tail
           } else if (m.group(4) == null) {
-            stack ::= (m.group(2), m)
+            stack ::= (m.group(2), start)
           }
           last = m
       }
@@ -181,7 +221,10 @@ object Stencil {
     if (last != null) (start - (last.end - last.start), start)
     else throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
   }
-  private def write(node: Node, env: Environment)(implicit factory: StencilFactory, formatter: Formatter, writer: Writer) {
+  private def writeNodeWith(node: Node, env: Environment)(implicit factory: StencilFactory, formatter: Formatter, writer: Writer): Unit = {
+    writeNode(node)(env, factory, formatter, writer)
+  }
+  private def writeNode(node: Node)(implicit env: Environment, factory: StencilFactory, formatter: Formatter, writer: Writer) {
     /*
     def formatValue: Any =>? String = {
       case ns: NodeSeq => ns.text
@@ -211,7 +254,7 @@ object Stencil {
             write('>')
           } else {
             write('>')
-            contents.foreach(n ⇒ write(n, env))
+            contents.foreach(n ⇒ writeNode(n))
             write('<')
             write('/')
             write(name)
@@ -219,58 +262,44 @@ object Stencil {
           }
         } else {
           directives.head match {
-            case d @ Namespace(prefix, uri) =>
-              write(tag.copy(directives = directives.tail), env)
-            case d @ Let(name, expression) =>
-              env.traverse(name, Expression(expression)).foreach { env =>
-                write(tag.copy(
-                  directives = directives.tail), env)
+            case d @ Namespace(prefix, _) =>
+              writeNode(tag.copy(directives = directives.tail))
+            case d @ Let(name, value) =>
+              env.traverse(name, value).foreach { e =>
+                writeNodeWith(tag.copy(directives = directives.tail), e)
+              }
+            case d @ Do(name, value) =>
+              env.traverse(name, value).foreach { e =>
+                writeNodeWith(tag.copy(directives = directives.tail), e)
+              }
+            case d @ DoBody(value) ⇒
+              env.traverse(name, value).foreach { e =>
+                writeNodeWith(tag.copy(directives = directives.tail), e)
               }
             case d @ Set(name, expression) =>
-              env.resolve(expression) match {
-                case Empty() =>
-                  write(tag.copy(
-                    attributes = attributes.filterNot(_._1 == name),
-                    directives = directives.tail), env)
-                case Some(t: Traversable[_]) ⇒
-                  t.foreach { value: Any =>
-                    write(tag.copy(
-                      attributes = attributes.filterNot(_._1 == name) :+ ((name, formatter(value))),
-                      directives = directives.tail), env)
-                  }
-                case Some(value) ⇒
-                  write(tag.copy(
-                    attributes = attributes.filterNot(_._1 == name) :+ ((name, formatter(value))),
-                    directives = directives.tail), env)
-              }
+              val result = expression.format
+              if (result.isEmpty)
+                writeNode(tag.copy(
+                  attributes = attributes.filterNot(_._1 == name),
+                  directives = directives.tail))
+              else
+                writeNode(tag.copy(
+                  attributes = attributes.filterNot(_._1 == name) :+ ((name, result)),
+                  directives = directives.tail))
             case d @ SetBody(expression) ⇒
-              env.resolve(expression) match {
-                case Empty() =>
-                  write(tag.copy(
-                    directives = directives.tail), env)
-                case Some(t: Traversable[_]) ⇒
-                  t.foreach { value: Any =>
-                    write(tag.copy(
-                      directives = directives.tail,
-                      contents = Seq(Text(formatter(value)))), env)
-                  }
-                case Some(value) =>
-                  write(tag.copy(
-                    directives = directives.tail,
-                    contents = Seq(Text(formatter(value)))), env)
-              }
-            case d @ Do(name, expression) =>
-              env.traverse(name, Expression(expression)).foreach { e =>
-                write(tag.copy(directives = directives.tail), e)
-              }
-            case d @ DoBody(expression) ⇒
-              env.traverse(name, Expression(expression)).foreach { e =>
-                write(tag.copy(directives = directives.tail), e)
-              }
-            case d @ Include(path) ⇒
-              val inclusion = factory.produce(path)
+              val result = expression.format
+              if (result.isEmpty)
+                writeNode(tag.copy(
+                  directives = directives.tail))
+              else
+                writeNode(tag.copy(
+                  directives = directives.tail,
+                  contents = Seq(Text(formatter(result)))))
+            case d @ Include(expression) ⇒
+              val result = expression.format
+              val inclusion = factory.produce(result)
               inclusion.tree.contents.foreach { node =>
-                write(node, env)(factory, formatter, writer)
+                writeNode(node)
               }
             case _ =>
           }
@@ -338,7 +367,7 @@ object Main {
   case class Product(name: String, price: Double)
 
   def main(args: Array[String]) {
-    import Formatter.Default
+    import Formatter.default
 
     val data = """<html xmlns:x="http://bitbonanza.org/stencil">
                  |  <body x:let-customer="order.customer">
