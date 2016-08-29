@@ -160,7 +160,7 @@ class StencilSpecification extends FunSuite {
       """, "persons" → List(Person("Lasse", Company("FOO"), old = true), Person("Pelle", Company("BAR"))))
   }
   test("missing end tags should throw exception") {
-    intercept[IllegalStateException](Stencil("""
+    val _ = intercept[IllegalStateException](Stencil("""
       <prefix/>
       <person x:do-person="persons">
         <name x:set-value="person.name" value="Kalle">
@@ -207,7 +207,7 @@ class StencilSpecification extends FunSuite {
   */
   */
   test("include should include specified stencil") {
-    val personInfoStencil = MapStencilFactory.produce(
+    MapStencilFactory.produce(
       "person/info", """<person-info x:set-name="#{person.name}" x:set-old="#{person.old}"/>""")
     assert("""
       <person x:do-person="persons"><name x:include="person/info"/></person>
@@ -229,7 +229,7 @@ class StencilSpecification extends FunSuite {
       "persons" → List(Person("Lasse", Company("FOO"), old = true), Person("Pelle", Company("BAR"))))
   }
 
-  private def assert(actual: String, expected: String, bindings: (String, AnyRef)*) {
+  private def assert(actual: String, expected: String, bindings: (String, AnyRef)*): Unit = {
     val stencil = Stencil(actual)
     val result = stencil.apply(bindings: _*)
     assert(result === expected)

@@ -150,6 +150,9 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
   })
 }
 object Environment {
+  def apply(): Environment = Environment(null, null)(Accessor.default)
+  def apply(value: Any)(implicit accessor: Accessor): Environment = Environment(null, value)
+
   case class Accessor(f: (Any, String) =>? Any) extends AnyVal {
     def apply(o: (Any, String)) = f(o)
   }
@@ -159,8 +162,6 @@ object Environment {
       case (o, "kind") => o.getClass.getSimpleName.toLowerCase()
     })
   }
-  def apply(value: Any)(implicit accessor: Accessor): Environment = Environment(null, value)
-
   sealed trait Expression {
     def literal: String
     override def toString: String = literal

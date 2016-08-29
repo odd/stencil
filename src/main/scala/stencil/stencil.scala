@@ -192,7 +192,7 @@ object Stencil {
           case _ ⇒ throw new IllegalStateException("Unknown directive encountered [" + m.group(0) + "]")
         })
       } else {
-        attributes ::= (m.group(2), m.group(3))
+        attributes ::= m.group(2) -> m.group(3)
       }
     }
     (attributes.reverse, directives.reverse)
@@ -212,7 +212,7 @@ object Stencil {
             }
             stack = stack.tail
           } else if (m.group(4) == null) {
-            stack ::= (m.group(2), start)
+            stack ::= m.group(2) -> start
           }
           last = m
       }
@@ -224,7 +224,7 @@ object Stencil {
   private def writeNodeWith(node: Node, env: Environment)(implicit factory: StencilFactory, formatter: Formatter, writer: Writer): Unit = {
     writeNode(node)(env, factory, formatter, writer)
   }
-  private def writeNode(node: Node)(implicit env: Environment, factory: StencilFactory, formatter: Formatter, writer: Writer) {
+  private def writeNode(node: Node)(implicit env: Environment, factory: StencilFactory, formatter: Formatter, writer: Writer): Unit = {
     /*
     def formatValue: Any =>? String = {
       case ns: NodeSeq => ns.text
@@ -306,11 +306,11 @@ object Stencil {
         }
     }
   }
-  private def write(c: Char)(implicit writer: Writer) {
-    writer.write(c)
+  private def write(c: Char)(implicit writer: Writer): Unit = {
+    writer.write(c.toInt)
     writer.flush()
   }
-  private def write(s: String)(implicit writer: Writer) {
+  private def write(s: String)(implicit writer: Writer): Unit = {
     writer.write(s)
     writer.flush()
   }
@@ -345,12 +345,13 @@ case class FileSystemStencilFactory(root: File) extends StencilFactory {
   }
 
   private def fetch(file: File): Stencil = {
-    var (stencil, timestamp) = cache.getOrElseUpdate(file, load(file) -> System.currentTimeMillis())
-    if (file.lastModified() > timestamp) {
-      stencil = load(file)
+    val (stencil, timestamp) = cache.getOrElseUpdate(file, load(file) -> System.currentTimeMillis())
+    if (file.lastModified() <= timestamp) stencil
+    else {
+      val stencil = load(file)
       cache.put(file, stencil -> System.currentTimeMillis())
+      stencil
     }
-    stencil
   }
 
   private def load(file: File): Stencil = {
@@ -366,7 +367,7 @@ object Main {
   case class OrderLine(product: Product, quantity: Int)
   case class Product(name: String, price: Double)
 
-  def main(args: Array[String]) {
+  def main(args: Array[String]): Unit = {
     import Formatter.default
 
     val data = """<html xmlns:x="http://bitbonanza.org/stencil">
