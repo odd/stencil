@@ -228,6 +228,43 @@ class StencilSpecification extends FunSuite {
            """,
       "persons" → List(Person("Lasse", Company("FOO"), old = true), Person("Pelle", Company("BAR"))))
   }
+  test("singular tags should be accepted around and within skipped directives") {
+    assert("""
+      |<br>
+      |<span x:do="missing">
+      |  <manager>
+      |    <br>
+      |    <name x:set="manager.name">Nisse</name>
+      |    <br>
+      |  </manager>
+      |</span>
+      |<br>""".stripMargin, """
+      |<br>
+      |
+      |<br>""".stripMargin)
+  }
+  test("singular tags should be accepted around and within directives") {
+    case class Manager(name: String, active: Boolean)
+    assert("""
+      |<br>
+      |<span x:do="manager">
+      |  <manager>
+      |    <br>
+      |    <name x:set="manager.name">Nisse</name>
+      |    <br>
+      |  </manager>
+      |</span>
+      |<br>""".stripMargin, """
+      |<br>
+      |<span>
+      |  <manager>
+      |    <br>
+      |    <name>Pelle</name>
+      |    <br>
+      |  </manager>
+      |</span>
+      |<br>""".stripMargin, "manager" → Manager("Pelle", false))
+  }
 
   private def assert(actual: String, expected: String, bindings: (String, AnyRef)*): Unit = {
     val stencil = Stencil(actual)

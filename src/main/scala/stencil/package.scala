@@ -1,6 +1,7 @@
 import scala.language.postfixOps
 import scala.xml.NodeSeq
 package stencil {
+  import scala.xml.Elem
   case class Formatter(f: Any =>? String) extends AnyVal {
     def apply(o: Any) = f(o)
   }
@@ -10,6 +11,7 @@ package stencil {
       case null => ""
       case None => ""
       case Some(v) => default(v)
+      case elem: Elem if !elem.child.exists(_.isInstanceOf[Elem]) => elem.text
       case ns: NodeSeq => ns.toString()
       case seq: Seq[_] => seq.map(default.apply).mkString(", ")
       case x => x.toString
@@ -45,6 +47,6 @@ package object stencil {
     def unapply(o: Any): Boolean = o.empty
   }
   object NonEmpty {
-    def unapply(o: Any): Boolean = o.empty
+    def unapply(o: Any): Boolean = !o.empty
   }
 }

@@ -3,15 +3,15 @@ package stencil
 import util.matching.Regex.{Match, MatchData}
 import java.io._
 
-import stencil.Environment.Expression
+import stencil.Environment.{Accessor, Expression}
 
 import scala.xml.NodeSeq
 
 class Stencil private (private[stencil] val tree: Stencil.Tree)(implicit factory: StencilFactory) {
   import Stencil._
   def this(reader: Reader)(implicit factory: StencilFactory) = this(Stencil.parse(reader))
-  def apply(bindings: (String, AnyRef)*)(implicit formatter: Formatter): String = apply(Environment(bindings.toMap))
-  def apply(nodes: NodeSeq)(implicit formatter: Formatter): String = apply(Environment(nodes))
+  def apply(bindings: (String, AnyRef)*)(implicit formatter: Formatter, accessor: Accessor): String = apply(Environment(bindings.toMap))
+  def apply(nodes: NodeSeq)(implicit formatter: Formatter, accessor: Accessor): String = apply(Environment(nodes))
   def apply(environment: Environment)(implicit formatter: Formatter): String = {
     implicit val writer = new StringWriter()
     tree.contents.foreach { n ⇒ writeNodeWith(n, environment) }
@@ -112,7 +112,8 @@ object Stencil {
   def fromReader(reader: Reader)(implicit factory: StencilFactory = MapStencilFactory): Stencil = new Stencil(reader)
 
   val StartOrCloseTag = """<\s*(/)?([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?>""".r
-  val DirectionTag = """<(?:\s*([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*(?:\s+(?:x:[\w_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))(?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?)>|(!--.*?--)>""".r
+  def StartOrCloseDirectiveTag(tagName: String) = s"""<\\s*(/)?($tagName)((?:\\s+(?:[\\w:_-]+)\\s*=\\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\\s*(/)?>""".r
+  val DirectiveTag = """<(?:\s*([\w:_-]+)((?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*(?:\s+(?:x:[\w_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))(?:\s+(?:[\w:_-]+)\s*=\s*(?:(?:"(?:[^"]*)")|(?:'(?:[^']*)')))*)\s*(/)?)>|(!--.*?--)>""".r
   val Attribute = """\s+(?:(x|[\w_-]+):)?([\w_-]+)\s*=\s*(?:(?:"([^"]*)")|(?:'([^']*)'))""".r
 
   def parse(reader: Reader): Tree = Tree(parse(asCharSequence(reader)))
@@ -121,7 +122,7 @@ object Stencil {
     var start = 0
     var lastMatch: Option[Match] = None
     do {
-      lastMatch = DirectionTag.findFirstMatchIn(data.subSequence(start, data.length()))
+      lastMatch = DirectiveTag.findFirstMatchIn(data.subSequence(start, data.length()))
       lastMatch match {
         case Some(m) =>
           val (tagStartStart, tagStartEnd) = (start + m.start, start + m.end)
@@ -203,7 +204,7 @@ object Stencil {
     var last: Match = null
     while (stack.nonEmpty && start < data.length) {
       val subSequence: CharSequence = data.subSequence(start, data.length)
-      StartOrCloseTag.findFirstMatchIn(subSequence) match {
+      StartOrCloseDirectiveTag(tagName).findFirstMatchIn(subSequence) match {
         case None ⇒ throw new IllegalStateException("No matching end tag found for start tag [" + tagName + "].")
         case Some(m) ⇒
           if (m.group(1) == "/") {
