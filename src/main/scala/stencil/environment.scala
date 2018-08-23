@@ -6,57 +6,73 @@ import scala.util.Try
 import scala.util.control.NonFatal
 import scala.xml.{Elem, NodeSeq}
 
-case class Environment(parent: Environment, instance: Any)(implicit accessor: Environment.Accessor) {
+case class Environment(parent: Environment, instance: Any)(
+    implicit accessor: Environment.Accessor
+) {
   import Environment._
-  def bind(name: String, value: Any): Environment = Environment(this, Map(name -> value))
-  def bind(bindings: (String, Any)*): Environment = Environment(this, bindings.toMap)
-  def bind(bindings: Map[String, Any]): Environment = Environment(this, bindings)
+  def bind(name: String, value: Any): Environment =
+    Environment(this, Map(name -> value))
+  def bind(bindings: (String, Any)*): Environment =
+    Environment(this, bindings.toMap)
+  def bind(bindings: Map[String, Any]): Environment =
+    Environment(this, bindings)
   private def bind(value: Any): Environment = Environment(this, value)
-  def traverse(name: String, exp: String): Seq[Environment] = traverse(name, Expression(exp))
+  def traverse(name: String, exp: String): Seq[Environment] =
+    traverse(name, Expression(exp))
   def traverse(name: String, exp: Expression): Seq[Environment] = exp match {
-    case Literal(Empty()) => Seq()
-    case Literal(value) => Seq(bind(name, value))
+    case Literal(Empty())    => Seq()
+    case Literal(value)      => Seq(bind(name, value))
     case Path(_, Empty(), _) => Seq()
     case p @ Path(_, _, _) =>
       val resolved: Option[Any] = resolve(p)
       val mapped: Option[Seq[Environment]] = resolved.map {
-          case t: Traversable[_] =>
-            t.map { v =>
-              bind(name, v)
-            }.toSeq
-          case Some(v) =>
-            bind(name, v).?.toSeq
-          case v =>
-            bind(name, v).?.toSeq
+        case t: Traversable[_] =>
+          t.map { v =>
+            bind(name, v)
+          }.toSeq
+        case Some(v) =>
+          bind(name, v).?.toSeq
+        case v =>
+          bind(name, v).?.toSeq
       }
       mapped.getOrElse(Seq.empty)
     case Conditional(_, condition, positive, negative) =>
       val resolvedCondition: Option[Any] = resolve(condition)
       val result: Option[Any] = resolvedCondition.flatMap {
-        case Empty() => resolve(negative)
+        case Empty()                  => resolve(negative)
         case c if positive.length > 0 => resolve(positive)
-        case c => c ??
+        case c                        => c ??
       }
       result.map(bind(name, _)).toSeq
   }
   def resolve(exp: String): Option[Any] = resolve(Expression(exp))
   def resolve(exp: Expression): Option[Any] = {
     val value: Option[Any] = resolveLocal(exp)
+    //rintln(s"resolve: exp = $exp, value = $value")
     val value2 =
-      if (value.isEmpty && parent != null) parent.?.map(_.resolve(exp)).getOrElse(None)
+      if (value.isEmpty && parent != null)
+        parent.?.map(_.resolve(exp)).getOrElse(None)
       else value
+    //rintln(s"resolve: exp = $exp, value2 = $value2")
     val value3 = value2.map(_.??).collect {
       case Some(x) => x
     }
+    //rintln(s"resolve: exp = $exp, value3 = $value3")
     value3
   }
   private[stencil] def resolveLocal(exp: Expression): Option[Any] = {
-    val handled: Traversable[(String, Option[Any])] = handlers.view.collect {
-      case (name, handler) if handler.isDefinedAt((exp, instance)) => (name, handler.apply((exp, instance)))
+    val handled: Traversable[(String, Option[Any])] = handlers.collect {
+      case (name, handler) if handler.isDefinedAt((exp, instance)) =>
+        //rintln(s"resolveLocal: exp = $exp, name = $name, instance = $instance")
+        (name, handler.apply((exp, instance)))
     }
+    //rintln(s"resolveLocal: exp = $exp, handled = ${handled.toList}")
     val mapped: Option[Any] = handled.collectFirst {
-      case (_, v @ NonEmpty()) => v
+      case (k, v @ NonEmpty()) =>
+        //rintln(s"resolveLocal: exp = $exp, k = $k, v = $v")
+        v
     }.??
+    //rintln(s"resolveLocal: exp = $exp, mapped = $mapped")
     mapped
   }
   private[this] def access(v: Any, acc: String): Option[Any] = {
@@ -67,101 +83,126 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
     }
   }
   private[this] type Handler = (Expression, Any) =>? Option[Any]
-  private[this] val handlers: Map[String, Handler] = ListMap(
-    "empty expression" -> {
-      case (Literal(Empty()), _) => None
-      case (Literal(value), _) =>
-        Some(value)
-      case (Conditional(_, condition, positive, negative), _) =>
-        val resolvedCondition = resolve(condition)
-        if (resolvedCondition.isEmpty) resolve(negative)
-        else if (positive.length > 0) resolve(positive)
-        else resolvedCondition
-      case (Path(_, Empty(), _), _) => None
-    }, "empty instance" -> {
-      case (_, Empty()) => None
-    }, "mapped" -> {
-      case (p @ Path(_, value, acc), map: Map[_, _]) if map.forall(t => t._1.isInstanceOf[String]) && map.asInstanceOf[Map[String, Any]].contains(value) =>
-        val result = map.asInstanceOf[Map[String, Any]].get(value)
-        access(result, acc)
-    }, "binding" -> {
-      case (p @ Path(_, segment, acc), (name, value)) if segment == name =>
-        access(value, acc)
-    }, "xml" -> {
-      case (p @ Path(_, name, acc), elem: Elem) if p.isSingleton && elem.label == name =>
-        //elem.
-        access(elem, acc)
-      case (p @ Path(_, name, acc), nodes: NodeSeq) if p.isSingleton =>
-        def select(ns: NodeSeq, child: String): Seq[Any] = {
-          def extract(ns: NodeSeq): List[Any] = {
-            val elems = (ns \ child).toList
-            if (elems.nonEmpty) elems
-            else {
-              val attrs = (ns \ ("@" + child)).toList.map(_.text)
-              attrs
-            }
-          }
-          if (ns.isEmpty) Seq.empty
-          else if (ns.size == 1) {
-            if (ns.isInstanceOf[Elem]) extract(ns)
-            else extract(ns.head)
-          } else {
-            ns.toList.flatMap { n =>
-              if (n.isInstanceOf[Elem]) extract(n)
-              else extract(n.head)
-            }
-          }
-        }
-        val selected: Seq[Any] = select(nodes, name)
-        if (selected.isEmpty && name == "text") nodes.text.?
-        else if (selected.isEmpty) None
-        else if (selected.size == 1) access(selected.head, acc)
-        else access(selected, acc)
-    }, "traversable" -> {
-      case (p @ Path(_, index, acc), t: Traversable[_]) if Try(index.toInt).isSuccess =>
-        val seq = t.toSeq
-        val v = p.toString.toInt
-        val i = math.max(0, math.min(seq.size - 1, if (v < 0) seq.size + v else v))
-        val result = seq(i).??
-        access(result, acc)
-      case (p@Path(_, _, acc), t: Traversable[_]) if !t.isInstanceOf[NodeSeq] =>
-      //case (p@Path(_, _, acc), t: Traversable[_]) =>
-        val options = t.map { o =>
-          Environment(parent, o).resolveLocal(p)
-        }
-        val values = options.collect {
-          case Some(v) => v
-        }
-        if (values.isEmpty) None
-        else if (values.size == 1) access(values.head, acc)
-        else access(values, acc)
-    }, "method" -> {
-      case (p@Path(_, name, acc), o: AnyRef) if p.isSingleton =>
-        try {
-          val value: Option[Any] = o.getClass.getMethod(name).invoke(o).??
+  private[this] val handlers: Map[String, Handler] =
+    ListMap(
+      "empty expression" -> {
+        case (Literal(Empty()), _) => None
+        case (Literal(value), _) =>
+          Some(value)
+        case (Conditional(_, condition, positive, negative), _) =>
+          val resolvedCondition = resolve(condition)
+          if (resolvedCondition.isEmpty) resolve(negative)
+          else if (positive.length > 0) resolve(positive)
+          else resolvedCondition
+        case (Path(_, Empty(), _), _) => None
+      },
+      "empty instance" -> {
+        case (_, Empty()) => None
+      },
+      "mapped" -> {
+        case (p @ Path(_, value, acc), map: Map[_, _])
+            if map.forall(t => t._1.isInstanceOf[String]) && map
+              .asInstanceOf[Map[String, Any]]
+              .contains(value) =>
+          val result = map.asInstanceOf[Map[String, Any]].get(value)
+          //rintln(s"mapped: p = $p, value = $value, map = $map, result = $result")
+          access(result, acc)
+      },
+      "binding" -> {
+        case (p @ Path(_, segment, acc), (name, value)) if segment == name =>
           access(value, acc)
-        } catch {
-          case e: NoSuchMethodException ⇒ None
-        }
-    }, "complex" -> {
-      case (p @ Path(_, _, acc), _) if p.isComplex =>
-        val canditates: Seq[(Expression, Expression)] = p.candidates
-        val mapped: Seq[Option[Any]] = canditates.map {
-          case (candidate, rest) =>
-            val local1: Option[Any] = resolveLocal(candidate)
-            val local3 = local1.flatMap { value =>
-              val local2: Option[Any] = bind(value).resolveLocal(rest)
-              local2
+      },
+      "xml" -> {
+        case (p @ Path(_, name, acc), elem: Elem)
+            if p.isSingleton && elem.label == name =>
+          access(elem, acc)
+        case (p @ Path(_, name, acc), nodes: NodeSeq) if p.isSingleton =>
+          def select(ns: NodeSeq, child: String): Seq[Any] = {
+            def extract(ns: NodeSeq): List[Any] = {
+              val elems = (ns \ child).toList
+              if (elems.nonEmpty) elems
+              else {
+                val attrs = (ns \ ("@" + child)).toList.map(_.text)
+                attrs
+              }
             }
-            local3
-        }
-        val result = mapped.headOption.getOrElse(None)
-        access(result, acc)
-    })
+            if (ns.isEmpty) Seq.empty
+            else if (ns.size == 1) {
+              if (ns.isInstanceOf[Elem]) extract(ns)
+              else extract(ns.head)
+            } else {
+              ns.toList.flatMap { n =>
+                if (n.isInstanceOf[Elem]) extract(n)
+                else extract(n.head)
+              }
+            }
+          }
+          val selected: Seq[Any] = select(nodes, name)
+          if (selected.isEmpty && name == "text") nodes.text.?
+          else if (selected.isEmpty) None
+          else if (selected.size == 1) access(selected.head, acc)
+          else access(selected, acc)
+      },
+      "traversable" -> {
+        case (p @ Path(_, index, acc), t: Traversable[_])
+            if Try(index.toInt).isSuccess =>
+          val seq = t.toSeq
+          val v = p.toString.toInt
+          val i =
+            math.max(0, math.min(seq.size - 1, if (v < 0) seq.size + v else v))
+          val result = seq(i).??
+          access(result, acc)
+        case (p @ Path(_, _, acc), t: Traversable[_])
+            if !t.isInstanceOf[NodeSeq] =>
+          //case (p@Path(_, _, acc), t: Traversable[_]) =>
+          val options = t.map { o =>
+            Environment(parent, o).resolveLocal(p)
+          }
+          val values = options.collect {
+            case Some(v) => v
+          }
+          if (values.isEmpty) None
+          else if (values.size == 1) access(values.head, acc)
+          else access(values, acc)
+      },
+      "method" -> {
+        case (p @ Path(_, name, acc), o: AnyRef) if p.isSingleton =>
+          try {
+            val value: Option[Any] = o.getClass.getMethod(name).invoke(o).??
+            access(value, acc)
+          } catch {
+            case e: NoSuchMethodException ⇒ None
+          }
+      },
+      "complex" -> {
+        case (p @ Path(_, _, acc), _) if p.isComplex =>
+          val candidates: Seq[(Expression, Expression)] = p.candidates
+          //val candidatesList: Seq[(Expression, Expression)] = candidates.toList
+          //rintln(s"complex: p = $p, candidates = $candidatesList")
+          val mapped: Seq[Option[Any]] = candidates.map {
+            case (candidate, rest) =>
+              val local1: Option[Any] = resolveLocal(candidate)
+              //rintln(s"complex: p = $p, local1 = $local1, candidate = $candidate, rest = $rest")
+              val local3 = local1.flatMap { value =>
+                val local2: Option[Any] = bind(value).resolveLocal(rest)
+                //rintln(s"complex: p = $p, local2 = $local2, rest = $rest, value = $value")
+                local2
+              }
+              //rintln(s"complex: p = $p, local3 = $local3, candidate = $candidate, rest = $rest")
+              local3
+          }
+          val result = mapped.collectFirst {
+            case Some(v) ⇒ v
+          }
+          //rintln(s"complex: p = $p, candidates = $candidatesList, mapped = ${mapped.toList}, result = $result")
+          access(result, acc)
+      }
+    )
 }
 object Environment {
   def apply(): Environment = Environment(null, null)(Accessor.default)
-  def apply(value: Any)(implicit accessor: Accessor): Environment = Environment(null, value)
+  def apply(value: Any)(implicit accessor: Accessor): Environment =
+    Environment(null, value)
 
   case class Accessor(f: (Any, String) =>? Any) extends AnyVal {
     def apply(o: (Any, String)) = f(o)
@@ -170,7 +211,7 @@ object Environment {
     implicit val default: Accessor = Accessor({
       case (o, Empty()) => o
       case (o, "class") => o.getClass.getName
-      case (o, "kind") => o.getClass.getSimpleName.toLowerCase()
+      case (o, "kind")  => o.getClass.getSimpleName.toLowerCase()
     })
   }
   sealed trait Expression {
@@ -179,25 +220,33 @@ object Environment {
   }
   object Expression {
     //val Pattern = """(^[a-zA-Z0-9_:-]*(?:\.[a-zA-Z0-9_:-]+)*$)|(^'[^']*'$)|(?:^/([^/]+)/([^/]*)/$)|(?:^(.+?)\?(.*?):(.+?)$)""".r
-    val Pattern = """(?:(^[a-zA-Z0-9_:-]*(?:[\[\.][a-zA-Z0-9_:-]+\]?)*)(?:@([a-zA-Z0-9_:-]+))?$)|(?:^'([^']*)'$)|(?:^(.+?)\?(.*?):(.+?)$)""".r
+    val Pattern =
+      """(?:(^[a-zA-Z0-9_:-]*(?:[\[\.][a-zA-Z0-9_:-]+\]?)*)(?:@([a-zA-Z0-9_:-]+))?$)|(?:^'([^']*)'$)|(?:^(.+?)\?(.*?):(.+?)$)""".r
     def apply(exp: String): Expression = {
       if (exp.empty) Literal("")
-      else try {
-        val Pattern(path, acc, literal, condition, positive, negative) = exp
-        if (path != null) Path(exp, path.replace('[', '.').replace(']', '.'), acc)
-        else if (literal != null) Literal(literal)
-        //else if (pattern != null) Replace(pattern, replacement)
-        else if (condition != null) Conditional(exp, condition, positive, negative)
-        else throw new IllegalArgumentException("Malformed expression specified: " + exp)
-      } catch {
-        case NonFatal(_) => Literal(exp)
-      }
+      else
+        try {
+          val Pattern(path, acc, literal, condition, positive, negative) = exp
+          if (path != null)
+            Path(exp, path.replace('[', '.').replace(']', '.'), acc)
+          else if (literal != null) Literal(literal)
+          //else if (pattern != null) Replace(pattern, replacement)
+          else if (condition != null)
+            Conditional(exp, condition, positive, negative)
+          else
+            throw new IllegalArgumentException(
+              "Malformed expression specified: " + exp
+            )
+        } catch {
+          case NonFatal(_) => Literal(exp)
+        }
     }
   }
   case class Literal(str: String) extends Expression {
     override def literal: String = str
   }
-  case class Path(literal: String, value: String, accessor: String) extends Expression {
+  case class Path(literal: String, value: String, accessor: String)
+      extends Expression {
     val segments: List[String] = value.split('.').toList
     val isEmpty: Boolean = segments.isEmpty
     val isSingleton: Boolean = segments.size == 1
@@ -217,7 +266,11 @@ object Environment {
       Expression(replacement).evaluate.map(v => String.valueOf(v).replace(pattern, ))
     }
   }*/
-  case class Conditional(literal: String, condition: String, positive: String, negative: String) extends Expression
+  case class Conditional(literal: String,
+                         condition: String,
+                         positive: String,
+                         negative: String)
+      extends Expression
 }
 
 /*
@@ -426,9 +479,9 @@ case class Environment2(parent: Environment, instance: AnyRef, name: Option[Stri
       val t2: Traversable[AnyRef] = t
       t2.map { o => apply(field, o) }.toList
     case _ => throw new IllegalStateException("!")
-    */
+ */
   }
-  */
+ */
   override def toString = name.map("\"" + _ + "\": ").getOrElse("") + instance.toString
 }
 object Environment2 {
@@ -640,5 +693,5 @@ object Environment2 {
   }
 
 }
-*/
-*/
+ */
+ */
