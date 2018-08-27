@@ -180,7 +180,7 @@ case class Environment(parent: Environment, instance: Any)(
             val value: Option[Any] = o.getClass.getField(name).get(o).??
             access(value, acc)
           } catch {
-            case e: NoSuchMethodException ⇒ None
+            case e: NoSuchFieldException ⇒ None
           }
       },
       "complex" -> {
