@@ -174,6 +174,15 @@ case class Environment(parent: Environment, instance: Any)(
             case e: NoSuchMethodException ⇒ None
           }
       },
+      "field" -> {
+        case (p @ Path(_, name, acc), o: AnyRef) if p.isSingleton =>
+          try {
+            val value: Option[Any] = o.getClass.getField(name).get(o).??
+            access(value, acc)
+          } catch {
+            case e: NoSuchMethodException ⇒ None
+          }
+      },
       "complex" -> {
         case (p @ Path(_, _, acc), _) if p.isComplex =>
           val candidates: Seq[(Expression, Expression)] = p.candidates
