@@ -15,6 +15,7 @@ class EnvironmentSpecification extends FreeSpec {
 
   def E(value: Any)(implicit accessor: Environment.Accessor): Environment =
     Environment(value)
+  def R[T](env: Environment, exp: String): Option[String] = env.resolve(exp).map(_.toString)
   def O[T](value: T): Option[T] = Option(value)
 
   "An environment" - {
@@ -302,6 +303,81 @@ class EnvironmentSpecification extends FreeSpec {
           persons
             .map(_.resolve("person.name.first")) === Seq(O("Nisse"), O("Pelle"))
         )
+      }
+    }
+
+    "when consisting of JSON nodes" - {
+      val json = ujson.read("""{
+                              |  "person": {
+                              |    "id": "kalle",
+                              |    "age": 20,
+                              |    "weight": 80.5,
+                              |    "name": {
+                              |      "first": "Kalle",
+                              |      "last": "Blomkvist"
+                              |    },
+                              |    "friends": [
+                              |      {
+                              |        "person": {
+                              |          "id": "nisse",
+                              |          "alias": "Slick",
+                              |          "name": {
+                              |            "first": "Nisse",
+                              |            "last": "Karlsson"
+                              |          }
+                              |        }
+                              |      },
+                              |      {
+                              |        "person": {
+                              |          "id": "pelle",
+                              |          "alias": "Animal",
+                              |          "name": {
+                              |            "first": "Pelle",
+                              |            "last": "Persson"
+                              |          }
+                              |        }
+                              |      }
+                              |    ]
+                              |  }
+                              |}""".stripMargin)
+
+      "should resolve missing expressions to None" in {
+        assert(E(json).traverse("alias", "person.alias") === Seq.empty)
+      }
+      "should resolve method expressions to their bound value in the nearest enclosing environment" in {
+        val env = E(json)
+        val friends: Seq[Environment] = env.traverse("friend", "person.friends")
+        val friendsHead = friends.head
+        val persons1: Seq[Environment] =
+          friendsHead.traverse("person", "friends.person")
+        val actual = persons1
+          .map(R(_, "person.name.first"))
+        val expected = Seq(O("Nisse"), O("Pelle"))
+        assert(
+          actual === expected
+        )
+        val persons2: Seq[Environment] =
+          env.traverse("person", "person.friends.person")
+        assert(
+          persons2
+            .map(R(_, "person.name.first")) === Seq(O("Nisse"), O("Pelle"))
+        )
+      }
+      "should resolve method expressions one level at a time" in {
+        val env = E(json)
+        assert(env.resolve("person.name.first") === O("Kalle"))
+        assert(env.resolve("person.name.last") === O("Blomkvist"))
+        val persons = env.traverse("person", "person.friends.person")
+        assert(persons.size === 2)
+        assert(
+          persons
+            .map(_.resolve("person.name.first")) === Seq(O("Nisse"), O("Pelle"))
+        )
+      }
+      "should resolve ints to ints and doubles to doubles" in {
+        val env = E(json)
+        assert(env.resolve("person.age") === O(20))
+        assert(env.resolve("person.weight") === O(80.5d))
       }
     }
   }

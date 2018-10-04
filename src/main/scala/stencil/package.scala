@@ -28,13 +28,16 @@ package object stencil {
   }
   implicit class RichAny(val o: Any) extends AnyVal {
     def empty: Boolean = o match {
-      case 0 | 0L | 0F | 0D | false       => true
-      case ()                             => true
       case null                           => true
+      case false                          => true
+      case ()                             => true
       case None                           => true
+      case Some(null)                     => true
+      case Some(v)                        => v.empty
       case s: String if s.trim.isEmpty    => true
       case t: Traversable[_] if t.isEmpty => true
-      case x                              => false
+      case p: Product                     => p.productIterator.toSeq.forall(_.empty)
+      case _                              => false
     }
     def nonEmpty: Boolean = !o.empty
     def `??` : Option[Any] = o match {
