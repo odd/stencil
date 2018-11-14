@@ -184,9 +184,9 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
         case (p @ Path(_, index, acc), arr: Js.Arr) if Try(index.toInt).isSuccess =>
           val seq = arr.value
           val v = p.toString.toInt
-          val i =
-            math.max(0, math.min(seq.size - 1, if (v < 0) seq.size + v else v))
-          val result = seq(i).??
+          //val i = math.max(0, math.min(seq.size - 1, if (v < 0) seq.size + v else v))
+          val i = if (v < 0) seq.size + v else v
+          val result = Try(seq(i)).toOption.??
           access(result, acc)
         case (p @ Path(_, _, acc), arr: Js.Arr) =>
           val options = arr.value.map { o =>
