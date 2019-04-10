@@ -1,8 +1,8 @@
 val Stencil = "0.9.0-SNAPSHOT"
-val Scala = "2.12.7"
-val ScalaXml = "1.1.0"
-val ScalaTest = "3.0.5"
-val uJson = "0.6.6"
+val Scala = "2.12.8"
+val ScalaXml = "1.2.0"
+val ScalaTest = "3.0.7"
+val uJson = "0.7.4"
 
 ThisBuild / organization := "org.bitbonanza"
 ThisBuild / version      := Stencil

@@ -87,13 +87,22 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
     mapped
   }
   private[this] def escape(v: Any): Any = v match {
-    case Js.Str(value)                         => value
-    case Js.Num(value) if value == value.toInt => value.toInt
-    case Js.Num(value)                         => value
-    case Js.Null                               => null
-    case Js.False                              => false
-    case Js.True                               => true
-    case x                                     => x
+    case Js.Str(value) =>
+      value
+    case Js.Num(value) if value == value.toInt =>
+      value.toInt
+    case Js.Num(value) =>
+      value
+    case Js.Null =>
+      null
+    case Js.False =>
+      false
+    case Js.True =>
+      true
+    case Some(x) =>
+      escape(x)
+    case x =>
+      x
   }
   private[this] def access(v: Any, acc: String): Option[Any] = {
     val vo = escape(v).??
@@ -203,9 +212,9 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
         case (p @ Path(_, index, acc), t: Traversable[_]) if Try(index.toInt).isSuccess =>
           val seq = t.toSeq
           val v = p.toString.toInt
-          val i =
-            math.max(0, math.min(seq.size - 1, if (v < 0) seq.size + v else v))
-          val result = seq(i).??
+          //val i = math.max(0, math.min(seq.size - 1, if (v < 0) seq.size + v else v))
+          val i = if (v < 0) seq.size + v else v
+          val result = Try(seq(i)).toOption.??
           access(result, acc)
         case (p @ Path(_, _, acc), t: Traversable[_]) if !t.isInstanceOf[NodeSeq] =>
           //case (p@Path(_, _, acc), t: Traversable[_]) =>

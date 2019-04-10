@@ -312,6 +312,8 @@ class EnvironmentSpecification extends FreeSpec {
                               |    "id": "kalle",
                               |    "age": 20,
                               |    "weight": 80.5,
+                              |    "colors": ["blue", "red", "green"],
+                              |    "fruits": ["apple"],
                               |    "name": {
                               |      "first": "Kalle",
                               |      "last": "Blomkvist"
@@ -378,6 +380,22 @@ class EnvironmentSpecification extends FreeSpec {
         val env = E(json)
         assert(env.resolve("person.age") === O(20))
         assert(env.resolve("person.weight") === O(80.5d))
+      }
+      "should resolve array string items to unquoted strings" in {
+        val env = E(json)
+        var result = env.resolve("person.colors.0")
+        assert(result === O("blue"))
+        result = env.resolve("person.fruits.0")
+        assert(result === O("apple"))
+      }
+      "should resolve negative array indices from the right" in {
+        val env = E(json)
+        var result = env.resolve("person.colors.-1")
+        assert(result === O("green"))
+        result = env.resolve("person.colors.-2")
+        assert(result === O("red"))
+        result = env.resolve("person.colors.-3")
+        assert(result === O("blue"))
       }
     }
   }
