@@ -15,7 +15,7 @@ ThisBuild / resolvers    ++= Seq(
   Resolver.bintrayRepo("sbt", "sbt-plugin-releases"),
   "Akka Snapshots" at "https://repo.akka.io/snapshots/")
 
-lazy val root = (project in file("."))
+lazy val stencil = (project in file("."))
   .settings(
     name := "stencil",
     libraryDependencies ++= Seq(
