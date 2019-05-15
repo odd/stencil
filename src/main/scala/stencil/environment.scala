@@ -1,13 +1,14 @@
 package stencil
 
 import scala.collection.immutable.ListMap
+import scala.collection.mutable
 import scala.language.postfixOps
 import scala.util.Try
 import scala.util.control.NonFatal
 import scala.xml.{Elem, NodeSeq}
-import ujson.Js
+import ujson._
 
-case class Environment(parent: Environment, instance: Any)(implicit accessor: Environment.Accessor) {
+case class Environment(parent: Environment, instance: Any)(implicit provider: Environment.Provider, accessor: Environment.Accessor) {
   import Environment._
   def bind(name: String, value: Any): Environment =
     Environment(this, Map(name -> value))
@@ -29,7 +30,7 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
           t.map { v =>
             bind(name, v)
           }.toList
-        case arr: Js.Arr =>
+        case arr: Arr =>
           arr.value.map { v =>
             bind(name, v)
           }.toList
@@ -73,9 +74,9 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
   }
   private[stencil] def resolveLocal(exp: Expression): Option[Any] = {
     val handled: Traversable[(String, Option[Any])] = handlers.collect {
-      case (name, handler) if handler.isDefinedAt((exp, instance)) =>
-        //rintln(s"resolveLocal: exp = $exp, name = $name, instance = $instance")
-        (name, handler.apply((exp, instance)))
+      case (handlerName, handler) if handler.isDefinedAt((exp, instance)) =>
+        //rintln(s"resolveLocal: exp = $exp, handler = $handlerName, instance = $instance")
+        (handlerName, handler.apply((exp, instance)))
     }
     //rintln(s"resolveLocal: exp = $exp, handled = ${handled.toList}")
     val mapped: Option[Any] = handled.collectFirst {
@@ -87,17 +88,17 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
     mapped
   }
   private[this] def escape(v: Any): Any = v match {
-    case Js.Str(value) =>
+    case Str(value) =>
       value
-    case Js.Num(value) if value == value.toInt =>
+    case Num(value) if value == value.toInt =>
       value.toInt
-    case Js.Num(value) =>
+    case Num(value) =>
       value
-    case Js.Null =>
+    case Null =>
       null
-    case Js.False =>
+    case False =>
       false
-    case Js.True =>
+    case True =>
       true
     case Some(x) =>
       escape(x)
@@ -111,15 +112,16 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
       else v
     }
   }
+  private[this] val providerCache = mutable.Map.empty[(Environment, Any, String), Option[Any]]
   private[this] type Handler = (Expression, Any) =>? Option[Any]
   private[this] val handlers: Map[String, Handler] =
     ListMap(
       "empty expression" -> {
-        case (Literal(Empty()), Js.Null)       => None
-        case (Literal(Empty()), Js.False)      => Some(false)
-        case (Literal(Empty()), Js.True)       => Some(true)
-        case (Literal(Empty()), Js.Str(value)) => Some(value)
-        case (Literal(Empty()), Js.Num(value)) => Some(value)
+        case (Literal(Empty()), Null)       => None
+        case (Literal(Empty()), False)      => Some(false)
+        case (Literal(Empty()), True)       => Some(true)
+        case (Literal(Empty()), Str(value)) => Some(value)
+        case (Literal(Empty()), Num(value)) => Some(value)
         case (Literal(Empty()), _)             => None
         case (Literal(value), _)               => Some(value)
         case (Conditional(_, condition, positive, negative), _) =>
@@ -131,6 +133,11 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
       },
       "empty instance" -> {
         case (_, Empty()) => None
+      },
+      "provided" -> {
+        case (p @ Path(_, value, acc), x) if provider.f.isDefinedAt((this, x, value)) =>
+          val key: (Environment, Any, String) = (this, x, value)
+          providerCache.getOrElseUpdate(key, access(provider(key), acc))
       },
       "mapped" -> {
         case (p @ Path(_, value, acc), map: Map[_, _])
@@ -176,28 +183,28 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
           else access(selected, acc)
       },
       "json" -> {
-        case (p @ Path(_, name, acc), obj: Js.Obj) if p.isSingleton && obj.value.contains(name) =>
+        case (p @ Path(_, name, acc), obj: Obj) if p.isSingleton && obj.value.contains(name) =>
           access(obj.apply(name), acc)
-        case (p @ Path(_, name, acc), obj: Js.Obj) if p.isSingleton =>
-          def select(obj: Js.Obj, child: String): Seq[Js.Value] = {
+        case (p @ Path(_, name, acc), obj: Obj) if p.isSingleton =>
+          def select(obj: Obj, child: String): Seq[Value] = {
             if (obj.value.isEmpty) Seq.empty
             else
               obj.value.collect {
-                case (_, Js.Obj(map)) if map.contains(child) => map(child)
+                case (_, Obj(map)) if map.contains(child) => map(child)
               }.toList
           }
-          val selected: Seq[Js.Value] = select(obj, name)
+          val selected: Seq[Value] = select(obj, name)
           if (selected.isEmpty) None
           else if (selected.size == 1) access(selected.head, acc)
           else access(selected, acc)
-        case (p @ Path(_, index, acc), arr: Js.Arr) if Try(index.toInt).isSuccess =>
+        case (p @ Path(_, index, acc), arr: Arr) if Try(index.toInt).isSuccess =>
           val seq = arr.value
           val v = p.toString.toInt
           //val i = math.max(0, math.min(seq.size - 1, if (v < 0) seq.size + v else v))
           val i = if (v < 0) seq.size + v else v
           val result = Try(seq(i)).toOption.??
           access(result, acc)
-        case (p @ Path(_, _, acc), arr: Js.Arr) =>
+        case (p @ Path(_, _, acc), arr: Arr) =>
           val options = arr.value.map { o =>
             Environment(parent, o).resolveLocal(p)
           }
@@ -273,15 +280,19 @@ case class Environment(parent: Environment, instance: Any)(implicit accessor: En
   override def toString = " << " + instance + " >> " + (if (parent != null) " // " + parent else "")
 }
 object Environment {
-  def apply(): Environment = Environment(null, null)(Accessor.default)
-  def apply(value: Any)(implicit accessor: Accessor): Environment =
-    Environment(null, value)
+  def apply(value: Any = null)(implicit accessor: Accessor = Accessor.Default, provider: Provider = Provider.Default): Environment = Environment(null, value)
 
+  case class Provider(f: (Environment, Any, String) =>? Any) extends AnyVal {
+    def apply(t: (Environment, Any, String)) = f(t)
+  }
+  object Provider {
+    implicit val Default: Provider = Provider(PartialFunction.empty)
+  }
   case class Accessor(f: (Any, String) =>? Any) extends AnyVal {
     def apply(o: (Any, String)) = f(o)
   }
   object Accessor {
-    implicit val default: Accessor = Accessor({
+    implicit val Default: Accessor = Accessor({
       case (o, Empty()) => o
       case (o, "class") => o.getClass.getName
       case (o, "kind")  => o.getClass.getSimpleName.toLowerCase()

@@ -1,4 +1,4 @@
-val Stencil = "0.9.0-SNAPSHOT"
+val Stencil = "0.9.1-SNAPSHOT"
 val Scala = "2.12.8"
 val ScalaXml = "1.2.0"
 val ScalaTest = "3.0.7"
