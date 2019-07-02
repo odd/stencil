@@ -4,10 +4,10 @@ val ScalaXml = "1.2.0"
 val ScalaTest = "3.0.7"
 val uJson = "0.7.4"
 
-ThisBuild / organization := "org.bitbonanza"
-ThisBuild / version      := Stencil
-ThisBuild / scalaVersion := Scala
-ThisBuild / resolvers    ++= Seq(
+organization := "org.bitbonanza"
+version      := Stencil
+scalaVersion := Scala
+resolvers    ++= Seq(
   Resolver.defaultLocal,
   Resolver.mavenLocal,
   Resolver.sonatypeRepo("snapshots"),
