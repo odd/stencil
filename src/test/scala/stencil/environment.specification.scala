@@ -1,7 +1,6 @@
 package stencil
 
 import org.scalatest.{FreeSpec, FunSuite}
-
 import scala.xml.XML
 
 class EnvironmentSpecification extends FreeSpec {
@@ -13,13 +12,13 @@ class EnvironmentSpecification extends FreeSpec {
     def attributes: Map[String, Any] = properties
   }
 
-  def E(value: Any)(implicit accessor: Environment.Accessor): Environment =
+  def E(value: Any)(implicit provider: Environment.Provider = Environment.Provider.Default, accessor: Environment.Accessor = Environment.Accessor.Default): Environment =
     Environment(value)
   def R[T](env: Environment, exp: String): Option[String] = env.resolve(exp).map(_.toString)
   def O[T](value: T): Option[T] = Option(value)
 
   "An environment" - {
-    import Environment.Accessor.default
+    import Environment.Accessor.Default
 
     "when empty" - {
       "should return empty seq for all names" in {
@@ -396,6 +395,31 @@ class EnvironmentSpecification extends FreeSpec {
         assert(result === O("red"))
         result = env.resolve("person.colors.-3")
         assert(result === O("blue"))
+      }
+      "should resolve provided values without environment" in {
+        val env = E()(provider = Environment.Provider ({
+          case (_, (), "person") => json("person")
+        }))
+        var result = env.resolve("person.colors.-1")
+        assert(result === O("green"))
+        result = env.resolve("person.colors.-2")
+        assert(result === O("red"))
+        result = env.resolve("person.colors.-3")
+        assert(result === O("blue"))
+      }
+      "should resolve provided values with environment" in {
+        val Friend = "-([^.]+)".r
+        val env = E(json)(provider = Environment.Provider ({
+          case (e, x, Friend(alias)) =>
+            val friends = e.traverse("friend", "person.friends").filter { e =>
+              val o4 = e.resolve("friend.alias")
+              o4.contains(alias)
+            }
+            val result = friends.map(_.resolve("friend").get)
+            result
+        }))
+        val result = env.resolve("-Slick.name.first")
+        assert(result === O("Nisse"))
       }
     }
   }
